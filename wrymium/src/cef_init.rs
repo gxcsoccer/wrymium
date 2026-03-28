@@ -277,7 +277,12 @@ fn install_message_pump() {
         _timer: CFRunLoopTimerRef,
         _info: *mut c_void,
     ) {
-        do_message_loop_work();
+        // CEF's message loop work creates Objective-C objects internally.
+        // Without an autorelease pool, these objects accumulate and get
+        // released into a stale pool, causing "unrecognized selector" crashes.
+        objc2::rc::autoreleasepool(|_| {
+            do_message_loop_work();
+        });
     }
 
     unsafe {
