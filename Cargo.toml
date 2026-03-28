@@ -1,0 +1,3 @@
+[workspace]
+members = ["wrymium", "examples/basic", "examples/feishu"]
+resolver = "2"

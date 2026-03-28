@@ -1,0 +1,44 @@
+[package]
+name = "wry"
+version = "0.55.0"
+edition = "2021"
+description = "CEF-powered WebView backend, wry-compatible API for Tauri"
+license = "MIT"
+
+[features]
+default = ["protocol", "os-webview"]
+protocol = []
+os-webview = []
+linux-body = []
+devtools = []
+x11 = []
+fullscreen = []
+transparent = []
+tracing = []
+mac-proxy = []
+
+[dependencies]
+cef = { version = "146", default-features = false }
+http = "1"
+dpi = "0.1"
+raw-window-handle = "0.6"
+once_cell = "1"
+url = "2"
+thiserror = "2"
+cookie = { version = "0.18", features = ["percent-encode"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSThread"] }
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSResponder"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+glib = "0.20"
+
+[build-dependencies]
+cfg_aliases = "0.2"
