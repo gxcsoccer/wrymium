@@ -17,7 +17,7 @@ pub trait WebViewBuilderExtMacos {
     fn with_webview_configuration(self, config: *mut c_void) -> Self;
 
     /// Set the traffic light inset position.
-    fn with_traffic_light_inset(self, position: (f64, f64)) -> Self;
+    fn with_traffic_light_inset(self, position: dpi::Position) -> Self;
 }
 
 impl<'a> WebViewBuilderExtMacos for WebViewBuilder<'a> {
@@ -26,7 +26,7 @@ impl<'a> WebViewBuilderExtMacos for WebViewBuilder<'a> {
         self
     }
 
-    fn with_traffic_light_inset(self, _position: (f64, f64)) -> Self {
+    fn with_traffic_light_inset(self, _position: dpi::Position) -> Self {
         // TODO: Could be mapped to CefWindowInfo positioning
         self
     }

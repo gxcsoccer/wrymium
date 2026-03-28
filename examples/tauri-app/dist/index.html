@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Wrymium + Tauri</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      margin: 0; padding: 40px;
+      background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+      color: #eee; min-height: 100vh; box-sizing: border-box;
+    }
+    h1 { color: #f7971e; margin-bottom: 8px; }
+    .subtitle { color: #a8dadc; margin-bottom: 32px; }
+    .card {
+      background: rgba(255,255,255,0.08); border-radius: 12px;
+      padding: 24px; margin-bottom: 16px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .card h3 { margin-top: 0; color: #ffd93d; }
+    code { background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; font-size: 14px; }
+    .status { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+    .status.ok { background: #2ecc71; color: #000; }
+    .status.pending { background: #f39c12; color: #000; }
+    #log {
+      margin-top: 16px; padding: 16px; background: rgba(0,0,0,0.4);
+      border-radius: 8px; font-family: monospace; font-size: 13px;
+      white-space: pre-wrap; min-height: 60px; max-height: 200px; overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>Wrymium + Tauri</h1>
+  <p class="subtitle">CEF-powered WebView rendering this Tauri app</p>
+
+  <div class="card">
+    <h3>Runtime Info</h3>
+    <p>User Agent: <code id="ua"></code></p>
+    <p>Platform: <code id="platform"></code></p>
+    <p>URL: <code id="url"></code></p>
+  </div>
+
+  <div class="card">
+    <h3>Checks</h3>
+    <p>Chromium engine: <span id="check-chromium" class="status pending">checking...</span></p>
+    <p>window.__TAURI_INTERNALS__: <span id="check-tauri" class="status pending">checking...</span></p>
+    <p>window.ipc: <span id="check-ipc" class="status pending">checking...</span></p>
+  </div>
+
+  <div class="card">
+    <h3>Console</h3>
+    <div id="log"></div>
+  </div>
+
+  <script>
+    function log(msg) {
+      const el = document.getElementById('log');
+      el.textContent += new Date().toLocaleTimeString() + ' ' + msg + '\n';
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function setStatus(id, ok, text) {
+      const el = document.getElementById(id);
+      el.className = 'status ' + (ok ? 'ok' : 'pending');
+      el.textContent = text || (ok ? 'OK' : 'N/A');
+    }
+
+    document.getElementById('ua').textContent = navigator.userAgent;
+    document.getElementById('platform').textContent = navigator.platform;
+    document.getElementById('url').textContent = location.href;
+
+    const isChromium = !!window.chrome || navigator.userAgent.includes('Chrome');
+    setStatus('check-chromium', isChromium, isChromium ? 'Chromium detected' : 'Not Chromium');
+    log(isChromium ? '[OK] Running on Chromium/CEF' : '[WARN] Not Chromium');
+
+    setTimeout(() => {
+      const hasTauri = !!window.__TAURI_INTERNALS__;
+      setStatus('check-tauri', hasTauri, hasTauri ? 'Available' : 'Not found');
+      log(hasTauri ? '[OK] Tauri internals available' : '[INFO] Tauri internals not injected');
+
+      const hasIpc = !!(window.ipc && typeof window.ipc.postMessage === 'function');
+      setStatus('check-ipc', hasIpc, hasIpc ? 'Available' : 'Not found');
+      log(hasIpc ? '[OK] window.ipc.postMessage bridge active' : '[INFO] window.ipc not available');
+    }, 1000);
+  </script>
+</body>
+</html>

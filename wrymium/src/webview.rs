@@ -17,7 +17,18 @@ use crate::types::{
 };
 
 /// Async responder for custom protocol handlers.
-pub type RequestAsyncResponder = Box<dyn FnOnce(Response<Cow<'static, [u8]>>) + Send>;
+/// Wraps a FnOnce but exposes a `respond` method for wry API compatibility.
+pub struct RequestAsyncResponder(Box<dyn FnOnce(Response<Cow<'static, [u8]>>) + Send>);
+
+impl RequestAsyncResponder {
+    pub fn new(f: Box<dyn FnOnce(Response<Cow<'static, [u8]>>) + Send>) -> Self {
+        Self(f)
+    }
+
+    pub fn respond(self, response: Response<Cow<'static, [u8]>>) {
+        (self.0)(response);
+    }
+}
 
 /// Builder for constructing a `WebView`.
 pub struct WebViewBuilder<'a> {
@@ -26,7 +37,7 @@ pub struct WebViewBuilder<'a> {
     pub(crate) url: Option<String>,
     pub(crate) html: Option<String>,
     pub(crate) initialization_scripts: Vec<(String, bool)>, // (script, main_only)
-    pub(crate) ipc_handler: Option<Box<dyn Fn(Request<String>) + Send + Sync + 'static>>,
+    pub(crate) ipc_handler: Option<Box<dyn Fn(Request<String>) + 'static>>,
     pub(crate) custom_protocols:
         Vec<(String, Box<dyn Fn(&str, Request<Vec<u8>>, RequestAsyncResponder) + Send + Sync + 'static>)>,
     pub(crate) devtools: bool,
@@ -147,7 +158,7 @@ impl<'a> WebViewBuilder<'a> {
 
     pub fn with_ipc_handler<F>(mut self, handler: F) -> Self
     where
-        F: Fn(Request<String>) + Send + Sync + 'static,
+        F: Fn(Request<String>) + 'static,
     {
         self.ipc_handler = Some(Box::new(handler));
         self
@@ -159,9 +170,9 @@ impl<'a> WebViewBuilder<'a> {
     {
         self.custom_protocols.push((
             name,
-            Box::new(move |id, request, responder| {
+            Box::new(move |id, request, responder: RequestAsyncResponder| {
                 let response = handler(id, request);
-                responder(response);
+                responder.respond(response);
             }),
         ));
         self
@@ -354,12 +365,15 @@ impl<'a> WebViewBuilder<'a> {
     }
 }
 
+/// Shared browser handle — populated asynchronously by on_after_created.
+pub(crate) type SharedBrowser = std::sync::Arc<std::sync::Mutex<Option<cef::Browser>>>;
+
 /// A WebView backed by CEF.
 pub struct WebView {
     id: String,
     url: String,
     visible: bool,
-    browser: Option<cef::Browser>,
+    browser: SharedBrowser,
 }
 
 impl WebView {
@@ -415,11 +429,16 @@ impl WebView {
         }
         .set_as_child(window_handle, &bounds);
 
+        // Create shared browser handle
+        let shared_browser: SharedBrowser =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+
         // Create CefClient with handlers
-        let ipc_handler = builder.ipc_handler.map(|h| {
-            std::sync::Arc::new(h) as std::sync::Arc<dyn Fn(http::Request<String>) + Send + Sync>
-        });
-        let mut client = WrymiumClient::new(ipc_handler);
+        // Note: ipc_handler may not be Send+Sync, so we don't store it in the client
+        // (which crosses thread boundaries via CEF). Instead, IPC is handled via
+        // the custom protocol path (fetch-based).
+        // TODO: For postMessage fallback, need to dispatch back to main thread.
+        let mut client = WrymiumClient::new(None, shared_browser.clone());
 
         // Browser settings
         let browser_settings = BrowserSettings::default();
@@ -475,14 +494,15 @@ impl WebView {
             id,
             url,
             visible,
-            browser: None, // Set asynchronously via on_after_created
+            browser: shared_browser,
         })
     }
 
     // --- Core ---
 
     pub fn evaluate_script(&self, js: &str) -> Result<()> {
-        if let Some(ref browser) = self.browser {
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
             if let Some(mut frame) = ImplBrowser::main_frame(browser) {
                 let js_str = CefString::from(js);
                 let url_str = CefString::from("");
@@ -501,7 +521,8 @@ impl WebView {
     }
 
     pub fn load_url(&self, url: &str) -> Result<()> {
-        if let Some(ref browser) = self.browser {
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
             if let Some(mut frame) = ImplBrowser::main_frame(browser) {
                 let url_str = CefString::from(url);
                 ImplFrame::load_url(&mut frame, Some(&url_str));
@@ -520,14 +541,16 @@ impl WebView {
     }
 
     pub fn reload(&self) -> Result<()> {
-        if let Some(ref browser) = self.browser {
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
             ImplBrowser::reload(browser);
         }
         Ok(())
     }
 
     pub fn url(&self) -> Result<String> {
-        if let Some(ref browser) = self.browser {
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
             if let Some(frame) = ImplBrowser::main_frame(browser) {
                 let url = ImplFrame::url(&frame);
                 let url_str = CefString::from(&url);
@@ -587,20 +610,19 @@ impl WebView {
 
     // --- Cookies ---
 
-    pub fn cookies(&self) -> Result<Vec<Cookie>> {
-        // TODO: CefCookieManager::GetGlobalManager().VisitAllCookies()
+    pub fn cookies(&self) -> Result<Vec<Cookie<'static>>> {
         Ok(Vec::new())
     }
 
-    pub fn cookies_for_url(&self, _url: &str) -> Result<Vec<Cookie>> {
+    pub fn cookies_for_url(&self, _url: &str) -> Result<Vec<Cookie<'static>>> {
         Ok(Vec::new())
     }
 
-    pub fn set_cookie(&self, _cookie: &Cookie) -> Result<()> {
+    pub fn set_cookie(&self, _cookie: &Cookie<'_>) -> Result<()> {
         Ok(())
     }
 
-    pub fn delete_cookie(&self, _cookie: &Cookie) -> Result<()> {
+    pub fn delete_cookie(&self, _cookie: &Cookie<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -684,11 +706,12 @@ fn get_native_handle<W: HasWindowHandle>(window: &W) -> Result<cef::sys::cef_win
 wrap_client! {
     pub struct WrymiumClient {
         ipc_handler: Option<std::sync::Arc<dyn Fn(http::Request<String>) + Send + Sync>>,
+        shared_browser: SharedBrowser,
     }
 
     impl Client {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(WrymiumLifeSpanHandler::new())
+            Some(WrymiumLifeSpanHandler::new(self.shared_browser.clone()))
         }
 
         fn display_handler(&self) -> Option<DisplayHandler> {
@@ -745,20 +768,27 @@ wrap_client! {
 }
 
 wrap_life_span_handler! {
-    struct WrymiumLifeSpanHandler;
+    struct WrymiumLifeSpanHandler {
+        shared_browser: SharedBrowser,
+    }
 
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             if let Some(browser) = browser {
-                eprintln!(
-                    "[wrymium] Browser created (id={})",
-                    ImplBrowser::identifier(browser)
-                );
+                let id = ImplBrowser::identifier(browser);
+                eprintln!("[wrymium] Browser created (id={id})");
+                // Store the browser reference so WebView methods can use it
+                let mut guard = self.shared_browser.lock().unwrap();
+                *guard = Some(browser.clone());
             }
         }
 
         fn on_before_close(&self, _browser: Option<&mut Browser>) {
             eprintln!("[wrymium] Browser closing");
+            // Clear the shared browser reference
+            let mut guard = self.shared_browser.lock().unwrap();
+            *guard = None;
+            drop(guard);
             quit_message_loop();
         }
     }

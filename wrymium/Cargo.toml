@@ -1,6 +1,6 @@
 [package]
 name = "wry"
-version = "0.55.0"
+version = "0.54.0"
 edition = "2021"
 description = "CEF-powered WebView backend, wry-compatible API for Tauri"
 license = "MIT"
@@ -10,6 +10,7 @@ default = ["protocol", "os-webview"]
 protocol = []
 os-webview = []
 linux-body = []
+drag-drop = []
 devtools = []
 x11 = []
 fullscreen = []

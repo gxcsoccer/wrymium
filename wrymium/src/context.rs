@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 /// Manages shared browser context and data directories.
 /// Compatible with wry::WebContext.
+#[derive(Debug)]
 pub struct WebContext {
     data_directory: Option<PathBuf>,
     allows_automation: bool,

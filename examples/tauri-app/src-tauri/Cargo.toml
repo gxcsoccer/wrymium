@@ -1,0 +1,15 @@
+[package]
+name = "wrymium-tauri-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+wry = "0.54"
+
+[patch.crates-io]
+wry = { path = "../../../wrymium" }
+tauri-runtime-wry = { path = "../../../tauri-runtime-wry" }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

@@ -284,13 +284,90 @@ impl IpcResourceHandlerInner {
 
 ---
 
-## 对 Spec 的必要更新
+## 下一阶段开发计划
 
-基于 Spike 结果，以下 spec 章节需要更新：
+### P0：修复 WebView.browser 字段（v0.1 补丁）
 
-1. **Tauri Integration**: 用户需要 patch 两个 crate（wry + tauri-runtime-wry），而非仅 wry
-2. **Repository Structure**: 需要增加 `tauri-runtime-wry/` fork 目录或独立仓库
-3. **Architecture Layers**: 依赖链增加 tauri-runtime-wry patch
-4. **Message Loop**: 用 CFRunLoopTimer 方案替代模糊的 "CEF thread" 描述
-5. **Milestones**: v0.1 增加 tauri-runtime-wry patch 工作项
-6. **系统依赖**: 增加 CMake + Ninja 要求的说明
+**问题**: `browser_host_create_browser` 是异步的，`WebView.browser` 在 `create()` 后永远是 `None`。导致 `evaluate_script`/`load_url`/`reload` 等方法创建后实际是空操作。
+
+**方案**: 用 `Arc<Mutex<Option<Browser>>>` 共享 browser 引用：
+1. `WebView::create()` 创建 `Arc<Mutex<Option<Browser>>>` 存入 `WebView` 和 `WrymiumLifeSpanHandler`
+2. `on_after_created` 回调中将 `Browser` 存入 shared state
+3. `WebView` 的所有方法从 shared state 读取 browser
+
+**状态**: TODO
+
+---
+
+### P1：实现 POST body 提取（v0.1 补丁）
+
+**问题**: `scheme.rs` 的 `extract_request_info` 始终返回空 body，导致 fetch-based IPC 的 POST 请求拿不到数据。
+
+**方案**: 通过 `ImplRequest::post_data()` 获取 `CefPostData`，遍历 `CefPostDataElement::GetBytes()` 拼接 body。
+
+**状态**: TODO
+
+---
+
+### P2：补全 Response headers 传递（v0.1 补丁）
+
+**问题**: `CefResourceHandler::response_headers` 只设置了 status 和 Content-Type，CORS headers（`Access-Control-Allow-Origin`、`Access-Control-Expose-Headers`）和 Tauri 自定义 header（`Tauri-Response`）未传递。
+
+**方案**: 在 `response_headers` 中遍历 `http::Response` 的全部 headers，通过 `CefResponse::set_header_map` 写入。需要调查 cef-rs 是否暴露了 `set_header_map` 的 safe wrapper。
+
+**状态**: TODO
+
+---
+
+### P3：Fork tauri-runtime-wry（v0.2 核心）
+
+**问题**: Spike 2 确认仅 patch wry 不够，必须同时 patch tauri-runtime-wry（5 个 RED blocker）。
+
+**工作内容**:
+1. Fork `tauri-apps/tauri` 仓库的 `crates/tauri-runtime-wry/` 目录
+2. 修改 ~6 个文件 ~200 行：
+   - `lib.rs:5256-5269` — macOS `inner_size()` 改为读取 CEF browser view NSView frame
+   - `lib.rs:5132-5220` — Windows 焦点/全屏改为 `CefFocusHandler`/`CefDisplayHandler`（v0.3）
+   - `undecorated_resizing.rs:524-600` — Linux resize 改为 CEF widget 事件（v0.4）
+   - `webview.rs` — `Webview` 平台结构体改为 CEF 句柄类型
+   - `lib.rs:4821-4834` — `NewWindowResponse::Create` 使用 CEF 句柄
+   - `lib.rs:3916-3963` — `WithWebview` handler 打包 CEF 句柄
+3. 使用 `#[cfg(feature = "cef")]` 条件编译
+
+**详细分析**: → [platform-trait-callsite-analysis.md](./platform-trait-callsite-analysis.md)
+
+**状态**: TODO
+
+---
+
+### P4：端到端 Tauri 示例（v0.2 验证）
+
+**目标**: 用一个真实的 Tauri 2.x 应用验证 wrymium + patched tauri-runtime-wry 的完整链路。
+
+**步骤**:
+1. 创建标准 Tauri 2.x app（`cargo create-tauri-app`）
+2. 在 `Cargo.toml` 中添加双 patch：
+   ```toml
+   [patch.crates-io]
+   wry = { path = "../wrymium/wrymium" }
+   tauri-runtime-wry = { path = "../wrymium/tauri-runtime-wry" }
+   ```
+3. 在 `main.rs` 开头添加 CEF subprocess 检查
+4. 验证：窗口显示、前端渲染、`invoke()` IPC、DevTools
+
+**依赖**: P0 + P1 + P3 完成后才能做
+
+**状态**: TODO
+
+---
+
+## 已完成的 Spec 更新
+
+以下 spec 章节已在之前的工作中更新：
+
+1. ~~Tauri Integration: 用户需要 patch 两个 crate~~ ✅ 已更新
+2. ~~Repository Structure: 增加 tauri-runtime-wry/ fork~~ ✅ 已更新
+3. ~~Architecture Layers: 依赖链增加 tauri-runtime-wry patch~~ ✅ 已更新
+4. ~~Message Loop: CFRunLoopTimer 方案~~ ✅ 已更新
+5. ~~Milestones: v0.1 增加相关工作项~~ ✅ 已更新
+6. ~~系统依赖: CMake + Ninja~~ ✅ 已更新

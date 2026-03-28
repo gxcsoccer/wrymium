@@ -12,17 +12,23 @@ wrymium exposes a **wry-compatible API**, so it can be used as a drop-in replace
 
 ## Status
 
-**v0.1 Proof of Concept** — macOS only.
+**v0.2 Tauri Integration** — macOS, Tauri 2.x end-to-end verified.
 
 Working features:
+- **Tauri 2.x app running on CEF** via `[patch.crates-io]` (wry + tauri-runtime-wry)
+- `tauri://localhost` custom protocol serving Tauri frontend assets
+- `window.__TAURI_INTERNALS__` injected and functional
 - CEF initialization with `external_message_pump` (CFRunLoopTimer at 30fps)
 - Browser window embedded in tao window via `set_as_child`
-- Custom scheme registration (`ipc://`, `tauri://`, `asset://`)
-- `CefSchemeHandlerFactory` + `CefResourceHandler` for protocol handling
+- Custom scheme registration (`ipc://`, `tauri://`, `asset://`) with async `CefResourceHandler`
+- `CefSchemeHandlerFactory` with proper async response handling (callback.cont())
 - `window.ipc.postMessage` V8 bridge (renderer -> browser IPC)
-- Cross-process initialization script injection via `extra_info`
+- Cross-process initialization script injection via `extra_info` (with race condition handling)
 - wry-compatible `WebViewBuilder` (35+ methods) and `WebView` (20+ methods)
+- Shared browser handle via `Arc<Mutex<Option<Browser>>>` for post-creation API calls
+- POST body extraction via `CefPostData` + response headers propagation
 - macOS `.app` bundle with 5 helper apps (GPU, Renderer, Plugin, Alerts, Helper)
+- 34 unit tests
 
 ## Architecture
 
@@ -117,6 +123,38 @@ fn main() {
 |---------|-------------|---------|
 | `basic` | IPC test with postMessage + custom protocol | `bash scripts/bundle-macos.sh wrymium-basic-example` |
 | `feishu` | Opens a Feishu document | `bash scripts/bundle-macos.sh wrymium-feishu-example "Feishu Doc"` |
+| `tauri-app` | Full Tauri 2.x app running on CEF | See [Tauri Integration](#tauri-integration) below |
+
+## Tauri Integration
+
+wrymium can replace wry in a real Tauri 2.x application via `[patch.crates-io]`:
+
+```toml
+# In your Tauri app's src-tauri/Cargo.toml
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+wry = "0.54"
+
+[patch.crates-io]
+wry = { path = "/path/to/wrymium/wrymium" }
+tauri-runtime-wry = { path = "/path/to/wrymium/tauri-runtime-wry" }
+```
+
+Add CEF subprocess check at the very beginning of `main()`:
+
+```rust
+fn main() {
+    if wry::is_cef_subprocess() {
+        std::process::exit(wry::run_cef_subprocess());
+    }
+
+    tauri::Builder::default()
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+```
+
+The patched `tauri-runtime-wry` is included in this repository with ~30 lines of changes to handle CEF-specific type differences (NSView pointers, NewWindowResponse, etc.).
 
 ## Project Structure
 
@@ -128,17 +166,19 @@ wrymium/
   │   │   ├── lib.rs             # public API re-exports
   │   │   ├── webview.rs         # WebView / WebViewBuilder + CefClient
   │   │   ├── cef_init.rs        # CEF lifecycle + message pump
-  │   │   ├── scheme.rs          # custom URI scheme handlers
+  │   │   ├── scheme.rs          # custom URI scheme handlers (async CefResourceHandler)
   │   │   ├── renderer.rs        # renderer process: V8 bridge + script injection
   │   │   ├── types.rs           # Rect, DragDropEvent, enums
   │   │   ├── error.rs           # Error type (wry-compatible)
   │   │   ├── context.rs         # WebContext
-  │   │   ├── tests.rs           # unit tests
+  │   │   ├── tests.rs           # unit tests (34 tests)
   │   │   └── platform/          # platform extension traits
   │   └── Cargo.toml
+  ├── tauri-runtime-wry/         # patched fork of tauri-runtime-wry 2.10.1
   ├── examples/
   │   ├── basic/                 # IPC test example
-  │   └── feishu/                # Feishu document viewer
+  │   ├── feishu/                # Feishu document viewer
+  │   └── tauri-app/             # full Tauri 2.x app on CEF
   ├── scripts/
   │   └── bundle-macos.sh        # macOS .app bundler
   └── docs/                      # spec, research, TODO

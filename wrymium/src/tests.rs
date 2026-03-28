@@ -88,14 +88,11 @@ mod types_tests {
 
     #[test]
     fn cookie_construction() {
-        let cookie = Cookie {
-            name: "session".into(),
-            value: "abc123".into(),
-            domain: ".example.com".into(),
-            path: "/".into(),
-        };
-        assert_eq!(cookie.name, "session");
-        assert_eq!(cookie.domain, ".example.com");
+        let mut cookie = Cookie::new("session", "abc123");
+        cookie.set_domain(".example.com");
+        cookie.set_path("/");
+        assert_eq!(cookie.name(), "session");
+        assert_eq!(cookie.domain(), Some("example.com"));
     }
 
     #[test]

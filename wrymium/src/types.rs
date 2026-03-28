@@ -73,7 +73,15 @@ pub enum PageLoadEvent {
 pub enum NewWindowResponse {
     Allow,
     Deny,
+    /// Create a new window with the given webview handle.
+    Create {
+        webview: *mut std::ffi::c_void,
+    },
 }
+
+// SAFETY: webview pointer only used on main thread
+unsafe impl Send for NewWindowResponse {}
+unsafe impl Sync for NewWindowResponse {}
 
 /// Theme preference (Windows only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,20 +97,29 @@ pub enum ScrollBarStyle {
     FluentOverlay,
 }
 
-/// Cookie type for cookie management.
-#[derive(Debug, Clone)]
-pub struct Cookie {
-    pub name: String,
-    pub value: String,
-    pub domain: String,
-    pub path: String,
+/// Re-export the cookie crate's Cookie type for wry compatibility.
+pub use cookie::Cookie;
+
+/// Opener info for new window requests (stub for CEF).
+#[derive(Debug, Clone, Default)]
+pub struct NewWindowOpener {
+    pub webview: *mut std::ffi::c_void,
+    #[cfg(target_os = "macos")]
+    pub target_configuration: *mut std::ffi::c_void,
+    #[cfg(target_os = "windows")]
+    pub environment: *mut std::ffi::c_void,
 }
+
+// SAFETY: Opener pointers are only used on the main thread.
+unsafe impl Send for NewWindowOpener {}
+unsafe impl Sync for NewWindowOpener {}
 
 /// Features of a new window request.
 #[derive(Debug, Clone, Default)]
 pub struct NewWindowFeatures {
     pub size: Option<(f64, f64)>,
     pub position: Option<(f64, f64)>,
+    pub opener: NewWindowOpener,
 }
 
 /// The ID type for webviews.

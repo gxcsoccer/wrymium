@@ -10,16 +10,21 @@ wrymium 暴露 **wry 兼容的 API**，可以通过 `[patch.crates-io]` 作为 w
 
 ## 当前状态
 
-**v0.1 概念验证** — 仅 macOS。
+**v0.2 Tauri 集成** — macOS，Tauri 2.x 端到端验证通过。
 
 已实现的功能：
+- **Tauri 2.x 应用在 CEF 上运行**——通过 `[patch.crates-io]` 替换 wry + tauri-runtime-wry
+- `tauri://localhost` 自定义协议正常服务 Tauri 前端资源
+- `window.__TAURI_INTERNALS__` 注入并可用
 - CEF 初始化 + `external_message_pump`（CFRunLoopTimer 30fps 驱动）
 - 浏览器窗口通过 `set_as_child` 嵌入 tao 窗口
-- 自定义协议注册（`ipc://`、`tauri://`、`asset://`）
-- `CefSchemeHandlerFactory` + `CefResourceHandler` 协议处理
+- 自定义协议注册（`ipc://`、`tauri://`、`asset://`）+ 异步 `CefResourceHandler`
+- `CefSchemeHandlerFactory` 支持异步响应（callback.cont()）
 - `window.ipc.postMessage` V8 桥接（渲染进程 → 浏览器进程 IPC）
-- 跨进程初始化脚本注入（通过 `extra_info`）
+- 跨进程初始化脚本注入（通过 `extra_info`，含竞态处理）
 - wry 兼容的 `WebViewBuilder`（35+ 方法）和 `WebView`（20+ 方法）
+- 共享浏览器句柄 `Arc<Mutex<Option<Browser>>>`
+- POST body 提取 + 响应 headers 完整传递
 - macOS `.app` 打包 + 5 个 Helper 子进程应用
 - 34 个单元测试
 
@@ -116,6 +121,38 @@ fn main() {
 |------|------|---------|
 | `basic` | IPC 测试：postMessage + 自定义协议 | `bash scripts/bundle-macos.sh wrymium-basic-example` |
 | `feishu` | 打开飞书文档 | `bash scripts/bundle-macos.sh wrymium-feishu-example "飞书文档"` |
+| `tauri-app` | 完整 Tauri 2.x 应用在 CEF 上运行 | 见下方 [Tauri 集成](#tauri-集成) |
+
+## Tauri 集成
+
+wrymium 可以通过 `[patch.crates-io]` 替换真实 Tauri 2.x 应用中的 wry：
+
+```toml
+# 在 Tauri 应用的 src-tauri/Cargo.toml 中
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+wry = "0.54"
+
+[patch.crates-io]
+wry = { path = "/path/to/wrymium/wrymium" }
+tauri-runtime-wry = { path = "/path/to/wrymium/tauri-runtime-wry" }
+```
+
+在 `main()` 最开头添加 CEF 子进程检查：
+
+```rust
+fn main() {
+    if wry::is_cef_subprocess() {
+        std::process::exit(wry::run_cef_subprocess());
+    }
+
+    tauri::Builder::default()
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+```
+
+仓库中包含了 patched 版本的 `tauri-runtime-wry`，仅修改了约 30 行代码来处理 CEF 特有的类型差异（NSView 指针、NewWindowResponse 等）。
 
 ## 项目结构
 
@@ -127,17 +164,19 @@ wrymium/
   │   │   ├── lib.rs             # 公开 API 导出
   │   │   ├── webview.rs         # WebView / WebViewBuilder + CefClient
   │   │   ├── cef_init.rs        # CEF 生命周期 + 消息泵
-  │   │   ├── scheme.rs          # 自定义 URI 协议处理
+  │   │   ├── scheme.rs          # 自定义 URI 协议处理（异步 CefResourceHandler）
   │   │   ├── renderer.rs        # 渲染进程：V8 桥接 + 脚本注入
   │   │   ├── types.rs           # Rect、DragDropEvent、枚举类型
   │   │   ├── error.rs           # Error 类型（wry 兼容）
   │   │   ├── context.rs         # WebContext
-  │   │   ├── tests.rs           # 单元测试
+  │   │   ├── tests.rs           # 单元测试（34 个）
   │   │   └── platform/          # 平台扩展 trait
   │   └── Cargo.toml
+  ├── tauri-runtime-wry/         # patched fork（基于 2.10.1）
   ├── examples/
   │   ├── basic/                 # IPC 测试示例
-  │   └── feishu/                # 飞书文档查看器
+  │   ├── feishu/                # 飞书文档查看器
+  │   └── tauri-app/             # 完整 Tauri 2.x 应用
   ├── scripts/
   │   └── bundle-macos.sh        # macOS .app 打包脚本
   └── docs/                      # 设计文档、调研、TODO

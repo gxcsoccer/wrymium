@@ -127,7 +127,7 @@ fn main() {
                     br#"{"status":"ok","message":"Hello from wrymium!"}"#.to_vec(),
                 ))
                 .unwrap();
-            responder(response);
+            responder.respond(response);
         })
         .build(&window)
         .expect("Failed to create WebView");
