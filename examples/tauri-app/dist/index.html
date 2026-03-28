@@ -61,6 +61,7 @@
     <h3>Test invoke()</h3>
     <input type="text" id="name-input" value="wrymium" placeholder="Enter name">
     <button onclick="testInvoke()">Call greet command</button>
+    <button onclick="benchmarkIPC()">Benchmark (100 calls)</button>
     <p id="greet-result" style="margin-top:12px;color:#2ecc71;font-size:16px;"></p>
   </div>
 
@@ -103,6 +104,22 @@
         testInvoke();
       }
     }, 1500);
+
+    async function benchmarkIPC() {
+      const el = document.getElementById('greet-result');
+      const N = 100;
+      el.textContent = 'Running ' + N + ' invoke() calls...';
+      log('[BENCH] Starting ' + N + ' sequential invoke() calls...');
+      const start = performance.now();
+      for (let i = 0; i < N; i++) {
+        await window.__TAURI_INTERNALS__.invoke('greet', { name: 'bench' });
+      }
+      const elapsed = performance.now() - start;
+      const avg = (elapsed / N).toFixed(2);
+      const msg = N + ' calls in ' + elapsed.toFixed(0) + 'ms — avg ' + avg + 'ms/call';
+      el.textContent = msg;
+      log('[BENCH] ' + msg);
+    }
 
     async function testInvoke() {
       const name = document.getElementById('name-input').value || 'world';

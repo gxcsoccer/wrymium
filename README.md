@@ -2,220 +2,151 @@
 
 [中文文档](README.zh-CN.md)
 
-A CEF-powered WebView backend for [wry](https://github.com/tauri-apps/wry), bringing consistent Chromium rendering to [Tauri](https://tauri.app) apps.
+A CEF-powered WebView backend for [wry](https://github.com/tauri-apps/wry), bringing consistent Chromium rendering to [Tauri](https://tauri.app) apps — with the performance of Rust instead of Node.js.
 
-## What is wrymium?
+## Why wrymium?
 
-Tauri uses system-native WebView (WebKit on macOS, WebView2 on Windows, WebKitGTK on Linux), which introduces rendering inconsistencies across platforms. wrymium replaces the native WebView with the [Chromium Embedded Framework (CEF)](https://bitbucket.org/chromiumembedded/cef), giving Tauri apps a consistent Chromium rendering engine on all platforms.
+| | Electron | Tauri (native WebView) | **wrymium (Tauri + CEF)** |
+|---|---|---|---|
+| Rendering | Chromium | WebKit/WebView2/WebKitGTK | **Chromium (consistent)** |
+| Backend | Node.js | Rust | **Rust** |
+| Cross-platform consistency | Excellent | Poor (3 different engines) | **Excellent** |
+| Backend performance | JavaScript (V8) | Native (Rust) | **Native (Rust)** |
+| Security model | Node.js full access | Tauri ACL | **Tauri ACL** |
 
-wrymium exposes a **wry-compatible API**, so it can be used as a drop-in replacement via `[patch.crates-io]`.
+**wrymium = Electron's rendering consistency + Tauri's Rust performance and security model.**
 
-## Status
+### Benchmark (Apple-to-Apple)
 
-**v0.2 Tauri Integration** — macOS, Tauri 2.x end-to-end verified.
+Same HTML page, same `greet` IPC command, macOS, Apple M2 Max:
 
-Working features:
-- **Tauri 2.x app running on CEF** via `[patch.crates-io]` (wry + tauri-runtime-wry)
-- `tauri://localhost` custom protocol serving Tauri frontend assets
-- `window.__TAURI_INTERNALS__` injected and functional
-- CEF initialization with `external_message_pump` (CFRunLoopTimer at 30fps)
-- Browser window embedded in tao window via `set_as_child`
-- Custom scheme registration (`ipc://`, `tauri://`, `asset://`) with async `CefResourceHandler`
-- `CefSchemeHandlerFactory` with proper async response handling (callback.cont())
-- `window.ipc.postMessage` V8 bridge (renderer -> browser IPC)
-- Cross-process initialization script injection via `extra_info` (with race condition handling)
-- wry-compatible `WebViewBuilder` (35+ methods) and `WebView` (20+ methods)
-- **Tauri `invoke()` IPC end-to-end** — frontend calls Rust commands, receives responses
-- Shared browser handle via `Arc<Mutex<Option<Browser>>>` for post-creation API calls
-- POST body extraction via `CefPostData` + response headers propagation
-- DevTools support (`open_devtools` / `close_devtools` / `is_devtools_open`)
-- macOS `.app` bundle with 5 helper apps (GPU, Renderer, Plugin, Alerts, Helper)
-- Debug-only logging via `wrymium_log!` macro (silent in release builds)
-- 41 unit tests, zero warnings
+| Metric | wrymium | Electron | |
+|--------|---------|----------|-|
+| Bundle size | **257 MB** | 247 MB | Comparable |
+| App binary | **4.6 MB** | ~49 MB (Node.js) | **91% smaller** |
+| Main process memory | **198 MB** | 285 MB (3 processes) | **30% less** |
+| Total memory | 569 MB | 452 MB | CEF uses stricter process isolation |
+| Process count | **5** | 7 | Fewer processes |
+| IPC latency | **0.48 ms** | 0.3-0.5 ms | Same ballpark |
 
-## Architecture
+Full benchmark: [docs/benchmark.md](docs/benchmark.md)
 
-wrymium is an **integration layer** built on top of [`tauri-apps/cef-rs`](https://github.com/tauri-apps/cef-rs):
+## Quick Start
 
-```
-Tauri App
-  └── tauri 2.x
-        └── tauri-runtime-wry (patched)
-              └── wrymium (as "wry")       <- this project
-                    └── cef (crates.io)    <- tauri-apps/cef-rs
-                          └── cef-dll-sys  <- raw CEF C API FFI
-```
-
-## Prerequisites
-
-- **Rust** (stable)
-- **CMake** (>= 3.x)
-- **Ninja** (required by cef-rs build system)
-- **C++ compiler** (Xcode CLT on macOS, MSVC on Windows, g++/clang++ on Linux)
+### Install tooling
 
 ```bash
 # macOS
 brew install cmake ninja
-
-# Linux
-sudo apt install cmake ninja-build build-essential
-
-# Windows — install CMake + Ninja + Visual Studio Build Tools
+cargo install cargo-wrymium --git https://github.com/gxcsoccer/wrymium
 ```
 
-## Quick Start
-
-### 1. Download CEF (first time only)
+### One-command run
 
 ```bash
-cargo install export-cef-dir
-export-cef-dir --force ~/.local/share/cef
-export CEF_PATH="$(ls -d ~/.local/share/cef/cef_binary_*_minimal)"
+# Clone and run an example
+git clone https://github.com/gxcsoccer/wrymium
+cd wrymium/examples/feishu
+cargo wrymium run
 ```
 
-Or let it auto-download on first `cargo build` (takes 3-10 minutes).
+That's it. `cargo wrymium` handles build → CEF bundle → launch automatically.
 
-### 2. Build and run an example
+### Use in your own Tauri app
 
-```bash
-# Set CEF_PATH if you downloaded manually
-export CEF_PATH="$HOME/.local/share/cef/cef_binary_146.0.6+g68649e2+chromium-146.0.7680.154_macosarm64_minimal"
+**1. Add patches** to `src-tauri/Cargo.toml`:
 
-# Bundle and run
-bash scripts/bundle-macos.sh wrymium-feishu-example "Feishu Doc"
-open target/bundle/wrymium-feishu-example.app
+```toml
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+wry = "0.54"
+
+[patch.crates-io]
+wry = { git = "https://github.com/gxcsoccer/wrymium", package = "wry" }
+tauri-runtime-wry = { git = "https://github.com/gxcsoccer/wrymium", path = "tauri-runtime-wry" }
 ```
 
-### 3. Use in your own project
+**2. Add CEF subprocess check** to `main.rs`:
 
 ```rust
-use tao::{event::{Event, WindowEvent}, event_loop::{ControlFlow, EventLoop}, window::WindowBuilder};
-use wry::{WebContext, WebViewBuilder};
-
 fn main() {
-    // CEF subprocess check — MUST be first
     if wry::is_cef_subprocess() {
         std::process::exit(wry::run_cef_subprocess());
     }
-
-    let event_loop = EventLoop::new();
-    let window = WindowBuilder::new()
-        .with_title("My App")
-        .build(&event_loop)
+    tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![/* your commands */])
+        .run(tauri::generate_context!())
         .unwrap();
-
-    let mut ctx = WebContext::new(None);
-    let _webview = WebViewBuilder::new_with_web_context(&mut ctx)
-        .with_url("https://example.com")
-        .build(&window)
-        .unwrap();
-
-    event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
-        if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event {
-            wry::shutdown();
-            *control_flow = ControlFlow::Exit;
-        }
-    });
 }
+```
+
+**3. Build and run:**
+
+```bash
+cargo wrymium run              # debug
+cargo wrymium run --release    # optimized (LTO + strip)
 ```
 
 ## Examples
 
 | Example | Description | Command |
 |---------|-------------|---------|
-| `basic` | IPC test with postMessage + custom protocol | `bash scripts/bundle-macos.sh wrymium-basic-example` |
-| `feishu` | Opens a Feishu document | `bash scripts/bundle-macos.sh wrymium-feishu-example "Feishu Doc"` |
-| `tauri-app` | Full Tauri 2.x app running on CEF | See [Tauri Integration](#tauri-integration) below |
+| `basic` | IPC test (postMessage + custom protocol + init scripts) | `cargo wrymium run` |
+| `feishu` | Feishu document viewer | `cd examples/feishu && cargo wrymium run` |
+| `tauri-app` | Full Tauri 2.x app with `invoke()` IPC | See [Getting Started](docs/getting-started.md) |
 
-## Tauri Integration
+## Developer Tools
 
-wrymium can replace wry in a real Tauri 2.x application via `[patch.crates-io]`:
+```bash
+# cargo xtask — works within the wrymium repo
+cargo xtask run wrymium-feishu-example
 
-```toml
-# In your Tauri app's src-tauri/Cargo.toml
-[dependencies]
-tauri = { version = "2", features = ["devtools"] }
-wry = "0.54"
-
-[patch.crates-io]
-wry = { path = "/path/to/wrymium/wrymium" }
-tauri-runtime-wry = { path = "/path/to/wrymium/tauri-runtime-wry" }
+# cargo wrymium — works in any wrymium project
+cargo wrymium run                  # auto-detect binary name
+cargo wrymium run --release        # optimized build
+cargo wrymium bundle --release     # bundle without launching
 ```
 
-Add CEF subprocess check at the very beginning of `main()`:
+## Architecture
 
-```rust
-fn main() {
-    if wry::is_cef_subprocess() {
-        std::process::exit(wry::run_cef_subprocess());
-    }
-
-    tauri::Builder::default()
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
+```
+Tauri App
+  └── tauri 2.x
+        └── tauri-runtime-wry (patched, ~30 lines changed)
+              └── wrymium (as "wry")       <- this project
+                    └── cef (crates.io)    <- tauri-apps/cef-rs
+                          └── cef-dll-sys  <- raw CEF C API FFI
 ```
 
-The patched `tauri-runtime-wry` is included in this repository with ~30 lines of changes to handle CEF-specific type differences (NSView pointers, NewWindowResponse, etc.).
+### Key implementation details
+
+- **CEF message pump**: `CFRunLoopTimer` at 30fps drives `CefDoMessageLoopWork()`, coexisting with tao's event loop
+- **IPC**: Tauri's `invoke()` goes through `fetch('ipc://localhost/cmd')` → `CefSchemeHandlerFactory` → async `CefResourceHandler` → Tauri command dispatch (0.48ms round-trip)
+- **Script injection**: Browser → renderer via `extra_info` (`DictionaryValue`), with deferred injection for race conditions
+- **V8 bridge**: `window.ipc.postMessage` via `CefV8Handler` + `CefProcessMessage` for fallback path
 
 ## Project Structure
 
 ```
 wrymium/
-  ├── Cargo.toml                 # workspace root
-  ├── wrymium/                   # main library crate (package name: "wry")
-  │   ├── src/
-  │   │   ├── lib.rs             # public API re-exports
-  │   │   ├── webview.rs         # WebView / WebViewBuilder + CefClient
-  │   │   ├── cef_init.rs        # CEF lifecycle + message pump
-  │   │   ├── scheme.rs          # custom URI scheme handlers (async CefResourceHandler)
-  │   │   ├── renderer.rs        # renderer process: V8 bridge + script injection
-  │   │   ├── types.rs           # Rect, DragDropEvent, enums
-  │   │   ├── error.rs           # Error type (wry-compatible)
-  │   │   ├── context.rs         # WebContext
-  │   │   ├── tests.rs           # unit tests (34 tests)
-  │   │   └── platform/          # platform extension traits
-  │   └── Cargo.toml
-  ├── tauri-runtime-wry/         # patched fork of tauri-runtime-wry 2.10.1
+  ├── wrymium/                   # main library (package name: "wry", version 0.54.0)
+  ├── tauri-runtime-wry/         # patched fork (based on 2.10.1)
+  ├── cargo-wrymium/             # cargo subcommand for build + bundle + run
+  ├── xtask/                     # workspace dev helper
   ├── examples/
-  │   ├── basic/                 # IPC test example
-  │   ├── feishu/                # Feishu document viewer
-  │   └── tauri-app/             # full Tauri 2.x app on CEF
-  ├── scripts/
-  │   └── bundle-macos.sh        # macOS .app bundler
-  └── docs/                      # spec, research, TODO
+  │   ├── basic/                 # IPC test
+  │   ├── feishu/                # Feishu doc viewer
+  │   └── tauri-app/             # full Tauri 2.x app
+  ├── scripts/bundle-macos.sh    # shell-based bundler
+  └── docs/                      # spec, benchmark, tutorial
 ```
-
-## How It Works
-
-### CEF Initialization
-
-wrymium initializes CEF lazily on the first `WebViewBuilder::build()` call:
-
-1. Load CEF framework via `LibraryLoader` (macOS dynamic loading)
-2. `CefExecuteProcess` — routes subprocess execution
-3. `CefInitialize` with `external_message_pump = true`
-4. Install `CFRunLoopTimer` at 30fps to drive `CefDoMessageLoopWork()`
-
-### IPC
-
-Tauri 2.x uses a dual-path IPC system:
-
-- **Primary**: `ipc://localhost` custom protocol via `fetch()` — handled by `CefSchemeHandlerFactory`
-- **Fallback**: `window.ipc.postMessage` — handled by V8 extension + `CefProcessMessage`
-
-### Script Injection
-
-Initialization scripts are passed from the browser process to renderer subprocess via `extra_info` (`DictionaryValue`), then injected in `OnContextCreated`. A race condition where `OnContextCreated` fires before `OnBrowserCreated` is handled with deferred injection.
 
 ## Documentation
 
-- [Getting Started / 使用教程](docs/getting-started.md) — step-by-step guide for standalone and Tauri integration
-- [Project Spec](docs/wrymium-spec.md) — full design document
-- [wry API Surface](docs/wry-api-surface.md) — inventory of wry symbols wrymium must implement
-- [IPC Deep Dive](docs/ipc-deep-dive.md) — Tauri 2.x IPC protocol analysis
-- [TODO](docs/TODO.md) — open issues and spike results
+- [Getting Started / 使用教程](docs/getting-started.md) — step-by-step guide
+- [Benchmark](docs/benchmark.md) — wrymium vs Electron comparison
+- [Project Spec](docs/wrymium-spec.md) — architecture and design
+- [TODO](docs/TODO.md) — roadmap and open issues
 
 ## License
 

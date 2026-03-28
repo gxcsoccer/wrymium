@@ -1,0 +1,10 @@
+[package]
+name = "cargo-wrymium"
+version = "0.1.0"
+edition = "2021"
+description = "Cargo subcommand for wrymium — build, bundle, and run CEF-powered Tauri/wry apps"
+license = "MIT"
+
+[[bin]]
+name = "cargo-wrymium"
+path = "src/main.rs"

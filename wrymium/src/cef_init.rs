@@ -215,9 +215,15 @@ wrap_app! {
             command_line: Option<&mut CommandLine>,
         ) {
             if let Some(cmd) = command_line {
-                // Avoid macOS Keychain password prompts during development
+                // Avoid macOS Keychain password prompts
                 let flag = CefString::from("use-mock-keychain");
                 ImplCommandLine::append_switch(cmd, Some(&flag));
+
+                // Limit renderer processes — Tauri apps use a single origin
+                // (tauri://localhost) so multiple renderers are wasteful
+                let key = CefString::from("renderer-process-limit");
+                let val = CefString::from("1");
+                ImplCommandLine::append_switch_with_value(cmd, Some(&key), Some(&val));
             }
         }
 

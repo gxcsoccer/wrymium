@@ -1,6 +1,11 @@
 #!/bin/bash
 # Bundle a wrymium example as a macOS .app with CEF framework
 # Usage: bundle-macos.sh [binary-name] [display-name]
+#
+# Optimizations:
+# - Helper binaries use hardlinks (saves ~30MB vs copies)
+# - CEF locale files stripped to en-US + zh-CN only (saves ~50MB)
+# - Binary stripped of debug symbols
 set -euo pipefail
 
 APP_NAME="${1:-wrymium-basic-example}"
@@ -40,8 +45,9 @@ rm -rf "$APP_DIR"
 # Create directory structure
 mkdir -p "$MACOS_DIR" "$FRAMEWORKS_DIR" "$RESOURCES_DIR"
 
-# Copy main executable
+# Copy and strip main executable
 cp "$TARGET_DIR/$APP_NAME" "$MACOS_DIR/$APP_NAME"
+strip "$MACOS_DIR/$APP_NAME" 2>/dev/null || true
 
 # Copy CEF framework
 echo "Copying CEF framework..."
@@ -51,6 +57,19 @@ if [ ! -d "$FRAMEWORK_SRC" ]; then
     exit 1
 fi
 cp -R "$FRAMEWORK_SRC" "$FRAMEWORKS_DIR/"
+
+# Strip unused locale files (keep only en-US and zh-CN)
+echo "Stripping unused locales..."
+CEF_RESOURCES="$FRAMEWORKS_DIR/Chromium Embedded Framework.framework/Resources"
+if [ -d "$CEF_RESOURCES" ]; then
+    find "$CEF_RESOURCES" -maxdepth 1 -name "*.lproj" -type d | while read -r lproj; do
+        LANG_NAME=$(basename "$lproj" .lproj)
+        case "$LANG_NAME" in
+            en|en_US|zh_CN|zh_Hans) ;; # keep
+            *) rm -rf "$lproj" ;;       # remove
+        esac
+    done
+fi
 
 # Copy CEF resources
 if [ -d "$CEF_DIR/Resources" ]; then
@@ -94,9 +113,7 @@ cat > "$CONTENTS_DIR/Info.plist" << PLIST
 </plist>
 PLIST
 
-# Create helper app bundles
-# CEF requires separate helper apps for GPU, Renderer, Plugin, Alerts processes.
-# They all use the same binary — CEF distinguishes via --type= argument.
+# Create helper app bundles using hardlinks (saves ~30MB vs copies)
 HELPERS=("Helper" "Helper (GPU)" "Helper (Renderer)" "Helper (Plugin)" "Helper (Alerts)")
 
 for HELPER in "${HELPERS[@]}"; do
@@ -105,8 +122,9 @@ for HELPER in "${HELPERS[@]}"; do
     HELPER_MACOS="$HELPER_APP/Contents/MacOS"
     mkdir -p "$HELPER_MACOS" "$HELPER_APP/Contents/Frameworks" "$HELPER_APP/Contents/Resources"
 
-    # Copy same binary as helper
-    cp "$TARGET_DIR/$APP_NAME" "$HELPER_MACOS/$HELPER_FULL"
+    # Use hardlink instead of copy (same inode, no extra disk space)
+    ln "$MACOS_DIR/$APP_NAME" "$HELPER_MACOS/$HELPER_FULL" 2>/dev/null \
+        || cp "$MACOS_DIR/$APP_NAME" "$HELPER_MACOS/$HELPER_FULL"
 
     # Create helper Info.plist
     cat > "$HELPER_APP/Contents/Info.plist" << HPLIST
@@ -148,11 +166,11 @@ for HELPER in "${HELPERS[@]}"; do
 HPLIST
 done
 
+# Report
+BUNDLE_SIZE=$(du -sh "$APP_DIR" | awk '{print $1}')
+BINARY_SIZE=$(ls -lh "$MACOS_DIR/$APP_NAME" | awk '{print $5}')
 echo ""
-echo "Bundle created at: $APP_DIR"
+echo "Bundle created: $APP_DIR ($BUNDLE_SIZE, binary $BINARY_SIZE)"
 echo ""
 echo "To run:"
 echo "  open $APP_DIR"
-echo ""
-echo "Or run directly:"
-echo "  DYLD_FALLBACK_LIBRARY_PATH=\"$FRAMEWORKS_DIR/Chromium Embedded Framework.framework/Libraries\" $MACOS_DIR/$APP_NAME"

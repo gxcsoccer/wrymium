@@ -1,223 +1,137 @@
 # wrymium
 
-基于 CEF 的 WebView 后端，为 [Tauri](https://tauri.app) 应用提供跨平台一致的 Chromium 渲染。
+基于 CEF 的 WebView 后端，为 [Tauri](https://tauri.app) 应用提供跨平台一致的 Chromium 渲染——后端用 Rust 而非 Node.js。
 
-## 这是什么？
+## 为什么选择 wrymium？
 
-Tauri 使用系统原生 WebView（macOS 的 WebKit、Windows 的 WebView2、Linux 的 WebKitGTK），这导致不同平台之间存在渲染差异。wrymium 用 [Chromium Embedded Framework (CEF)](https://bitbucket.org/chromiumembedded/cef) 替换原生 WebView，让 Tauri 应用在所有平台上获得一致的 Chromium 渲染引擎。
+| | Electron | Tauri（原生 WebView） | **wrymium（Tauri + CEF）** |
+|---|---|---|---|
+| 渲染引擎 | Chromium | WebKit/WebView2/WebKitGTK | **Chromium（一致）** |
+| 后端 | Node.js | Rust | **Rust** |
+| 跨平台一致性 | 优秀 | 差（3 套引擎） | **优秀** |
+| 后端性能 | JavaScript (V8) | 原生 (Rust) | **原生 (Rust)** |
+| 安全模型 | Node.js 全权限 | Tauri ACL | **Tauri ACL** |
 
-wrymium 暴露 **wry 兼容的 API**，可以通过 `[patch.crates-io]` 作为 wry 的直接替代品使用。
+**wrymium = Electron 的渲染一致性 + Tauri 的 Rust 性能和安全模型。**
 
-## 当前状态
+### 实测对比（Apple-to-Apple）
 
-**v0.2 Tauri 集成** — macOS，Tauri 2.x 端到端验证通过。
+相同 HTML 页面、相同 `greet` IPC 命令、macOS、Apple M2 Max：
 
-已实现的功能：
-- **Tauri 2.x 应用在 CEF 上运行**——通过 `[patch.crates-io]` 替换 wry + tauri-runtime-wry
-- `tauri://localhost` 自定义协议正常服务 Tauri 前端资源
-- `window.__TAURI_INTERNALS__` 注入并可用
-- CEF 初始化 + `external_message_pump`（CFRunLoopTimer 30fps 驱动）
-- 浏览器窗口通过 `set_as_child` 嵌入 tao 窗口
-- 自定义协议注册（`ipc://`、`tauri://`、`asset://`）+ 异步 `CefResourceHandler`
-- `CefSchemeHandlerFactory` 支持异步响应（callback.cont()）
-- `window.ipc.postMessage` V8 桥接（渲染进程 → 浏览器进程 IPC）
-- 跨进程初始化脚本注入（通过 `extra_info`，含竞态处理）
-- wry 兼容的 `WebViewBuilder`（35+ 方法）和 `WebView`（20+ 方法）
-- **Tauri `invoke()` IPC 端到端** — 前端调用 Rust 命令，接收返回结果
-- 共享浏览器句柄 `Arc<Mutex<Option<Browser>>>`
-- POST body 提取 + 响应 headers 完整传递
-- DevTools 支持（`open_devtools` / `close_devtools` / `is_devtools_open`）
-- macOS `.app` 打包 + 5 个 Helper 子进程应用
-- Debug 模式日志（`wrymium_log!` 宏，release 模式静默）
-- 41 个单元测试，零 warnings
+| 指标 | wrymium | Electron | |
+|------|---------|----------|-|
+| 包体积 | **257 MB** | 247 MB | 基本持平 |
+| 应用 binary | **4.6 MB** | ~49 MB (Node.js) | **小 91%** |
+| Main 进程内存 | **198 MB** | 285 MB（3 进程） | **少 30%** |
+| 总内存 | 569 MB | 452 MB | CEF 进程隔离更严格 |
+| 进程数 | **5** | 7 | 更少 |
+| IPC 延迟 | **0.48 ms** | 0.3-0.5 ms | 同一量级 |
 
-## 架构
+完整评测：[docs/benchmark.md](docs/benchmark.md)
 
-wrymium 是一个**集成层**，构建在 [`tauri-apps/cef-rs`](https://github.com/tauri-apps/cef-rs) 之上：
+## 快速开始
 
-```
-Tauri 应用
-  └── tauri 2.x
-        └── tauri-runtime-wry（通过 patch 替换）
-              └── wrymium（包名 "wry"）     ← 本项目
-                    └── cef（crates.io）    ← tauri-apps/cef-rs
-                          └── cef-dll-sys  ← CEF C API FFI 绑定
-```
-
-## 环境要求
-
-- **Rust**（stable）
-- **CMake**（>= 3.x）
-- **Ninja**（cef-rs 构建系统硬依赖）
-- **C++ 编译器**（macOS: Xcode CLT，Windows: MSVC，Linux: g++/clang++）
+### 安装工具
 
 ```bash
 # macOS
 brew install cmake ninja
-
-# Linux
-sudo apt install cmake ninja-build build-essential
-
-# Windows — 安装 CMake + Ninja + Visual Studio 构建工具
+cargo install cargo-wrymium --git https://github.com/gxcsoccer/wrymium
 ```
 
-## 快速开始
-
-### 1. 下载 CEF（首次）
+### 一键运行
 
 ```bash
-cargo install export-cef-dir
-export-cef-dir --force ~/.local/share/cef
-export CEF_PATH="$(ls -d ~/.local/share/cef/cef_binary_*_minimal)"
+git clone https://github.com/gxcsoccer/wrymium
+cd wrymium/examples/feishu
+cargo wrymium run
 ```
 
-也可以跳过手动下载，首次 `cargo build` 时会自动下载（约 3-10 分钟）。
+`cargo wrymium` 自动完成 编译 → CEF 打包 → 启动。
 
-### 2. 编译运行示例
+### 在你的 Tauri 应用中使用
 
-```bash
-# 设置 CEF_PATH（如果手动下载了的话）
-export CEF_PATH="$HOME/.local/share/cef/cef_binary_146.0.6+g68649e2+chromium-146.0.7680.154_macosarm64_minimal"
-
-# 打包并运行飞书文档示例
-bash scripts/bundle-macos.sh wrymium-feishu-example "飞书文档"
-open target/bundle/wrymium-feishu-example.app
-```
-
-### 3. 在自己的项目中使用
-
-```rust
-use tao::{event::{Event, WindowEvent}, event_loop::{ControlFlow, EventLoop}, window::WindowBuilder};
-use wry::{WebContext, WebViewBuilder};
-
-fn main() {
-    // CEF 子进程检查 — 必须放在 main 最开头
-    if wry::is_cef_subprocess() {
-        std::process::exit(wry::run_cef_subprocess());
-    }
-
-    let event_loop = EventLoop::new();
-    let window = WindowBuilder::new()
-        .with_title("我的应用")
-        .build(&event_loop)
-        .unwrap();
-
-    let mut ctx = WebContext::new(None);
-    let _webview = WebViewBuilder::new_with_web_context(&mut ctx)
-        .with_url("https://example.com")
-        .build(&window)
-        .unwrap();
-
-    event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
-        if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event {
-            wry::shutdown();
-            *control_flow = ControlFlow::Exit;
-        }
-    });
-}
-```
-
-## 示例
-
-| 示例 | 描述 | 运行命令 |
-|------|------|---------|
-| `basic` | IPC 测试：postMessage + 自定义协议 | `bash scripts/bundle-macos.sh wrymium-basic-example` |
-| `feishu` | 打开飞书文档 | `bash scripts/bundle-macos.sh wrymium-feishu-example "飞书文档"` |
-| `tauri-app` | 完整 Tauri 2.x 应用在 CEF 上运行 | 见下方 [Tauri 集成](#tauri-集成) |
-
-## Tauri 集成
-
-wrymium 可以通过 `[patch.crates-io]` 替换真实 Tauri 2.x 应用中的 wry：
+**1. 添加 patch** 到 `src-tauri/Cargo.toml`：
 
 ```toml
-# 在 Tauri 应用的 src-tauri/Cargo.toml 中
 [dependencies]
 tauri = { version = "2", features = ["devtools"] }
 wry = "0.54"
 
 [patch.crates-io]
-wry = { path = "/path/to/wrymium/wrymium" }
-tauri-runtime-wry = { path = "/path/to/wrymium/tauri-runtime-wry" }
+wry = { git = "https://github.com/gxcsoccer/wrymium", package = "wry" }
+tauri-runtime-wry = { git = "https://github.com/gxcsoccer/wrymium", path = "tauri-runtime-wry" }
 ```
 
-在 `main()` 最开头添加 CEF 子进程检查：
+**2. 添加 CEF 子进程检查** 到 `main.rs`：
 
 ```rust
 fn main() {
     if wry::is_cef_subprocess() {
         std::process::exit(wry::run_cef_subprocess());
     }
-
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![/* 你的 commands */])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap();
 }
 ```
 
-仓库中包含了 patched 版本的 `tauri-runtime-wry`，仅修改了约 30 行代码来处理 CEF 特有的类型差异（NSView 指针、NewWindowResponse 等）。
+**3. 编译运行：**
 
-## 项目结构
-
-```
-wrymium/
-  ├── Cargo.toml                 # workspace 根
-  ├── wrymium/                   # 主库 crate（包名："wry"）
-  │   ├── src/
-  │   │   ├── lib.rs             # 公开 API 导出
-  │   │   ├── webview.rs         # WebView / WebViewBuilder + CefClient
-  │   │   ├── cef_init.rs        # CEF 生命周期 + 消息泵
-  │   │   ├── scheme.rs          # 自定义 URI 协议处理（异步 CefResourceHandler）
-  │   │   ├── renderer.rs        # 渲染进程：V8 桥接 + 脚本注入
-  │   │   ├── types.rs           # Rect、DragDropEvent、枚举类型
-  │   │   ├── error.rs           # Error 类型（wry 兼容）
-  │   │   ├── context.rs         # WebContext
-  │   │   ├── tests.rs           # 单元测试（34 个）
-  │   │   └── platform/          # 平台扩展 trait
-  │   └── Cargo.toml
-  ├── tauri-runtime-wry/         # patched fork（基于 2.10.1）
-  ├── examples/
-  │   ├── basic/                 # IPC 测试示例
-  │   ├── feishu/                # 飞书文档查看器
-  │   └── tauri-app/             # 完整 Tauri 2.x 应用
-  ├── scripts/
-  │   └── bundle-macos.sh        # macOS .app 打包脚本
-  └── docs/                      # 设计文档、调研、TODO
+```bash
+cargo wrymium run              # debug 模式
+cargo wrymium run --release    # 优化模式（LTO + strip）
 ```
 
-## 工作原理
+## 示例
 
-### CEF 初始化
+| 示例 | 描述 | 命令 |
+|------|------|------|
+| `basic` | IPC 测试（postMessage + 自定义协议 + 脚本注入） | `cargo wrymium run` |
+| `feishu` | 飞书文档查看器 | `cd examples/feishu && cargo wrymium run` |
+| `tauri-app` | 完整 Tauri 2.x 应用 + `invoke()` IPC | 见 [使用教程](docs/getting-started.md) |
 
-wrymium 在首次调用 `WebViewBuilder::build()` 时懒加载初始化 CEF：
+## 开发工具
 
-1. 通过 `LibraryLoader` 加载 CEF framework（macOS 动态加载）
-2. `CefExecuteProcess` — 路由子进程执行
-3. `CefInitialize`，设置 `external_message_pump = true`
-4. 安装 `CFRunLoopTimer`（30fps）驱动 `CefDoMessageLoopWork()`
+```bash
+# cargo xtask — 仅在 wrymium 仓库内使用
+cargo xtask run wrymium-feishu-example
 
-### IPC 通信
+# cargo wrymium — 在任意 wrymium 项目中使用
+cargo wrymium run                  # 自动检测 binary 名称
+cargo wrymium run --release        # 优化构建
+cargo wrymium bundle --release     # 只打包不启动
+```
 
-Tauri 2.x 使用双路径 IPC 系统：
+## 架构
 
-- **主路径**：`ipc://localhost` 自定义协议，通过 `fetch()` 发送 — 由 `CefSchemeHandlerFactory` 处理
-- **回退路径**：`window.ipc.postMessage` — 由 V8 扩展 + `CefProcessMessage` 处理
+```
+Tauri 应用
+  └── tauri 2.x
+        └── tauri-runtime-wry（patched，~30 行改动）
+              └── wrymium（包名 "wry"）     ← 本项目
+                    └── cef（crates.io）    ← tauri-apps/cef-rs
+                          └── cef-dll-sys  ← CEF C API FFI
+```
 
-### 脚本注入
+### 关键实现
 
-初始化脚本通过 `extra_info`（`DictionaryValue`）从浏览器进程传递到渲染子进程，在 `OnContextCreated` 中注入。当 `OnContextCreated` 先于 `OnBrowserCreated` 触发时（竞态），wrymium 使用延迟注入机制处理。
+- **CEF 消息泵**：`CFRunLoopTimer` 30fps 驱动 `CefDoMessageLoopWork()`，与 tao 事件循环共存
+- **IPC**：Tauri 的 `invoke()` 经过 `fetch('ipc://localhost/cmd')` → `CefSchemeHandlerFactory` → 异步 `CefResourceHandler` → Tauri 命令分发（0.48ms 往返）
+- **脚本注入**：browser → renderer 通过 `extra_info`（`DictionaryValue`），含竞态延迟注入
+- **V8 桥接**：`window.ipc.postMessage` 通过 `CefV8Handler` + `CefProcessMessage` 实现回退路径
 
 ## 与 Tauri 官方 CEF 计划的关系
 
-Tauri 团队（CrabNebula）正在内部探索 CEF 集成，但该工作尚未公开，可能成为商业/闭源产品。wrymium 是一个**开源、社区驱动**的替代方案，填补了官方 CEF 支持可能商业化的空白。wrymium 构建在 Tauri 团队维护的开源 `cef-rs` 绑定之上。
+Tauri 团队（CrabNebula）正在内部探索 CEF 集成，但尚未公开，可能成为商业产品。wrymium 是**开源、社区驱动**的替代方案，构建在 Tauri 团队维护的开源 `cef-rs` 绑定之上。
 
 ## 文档
 
-- [使用教程](docs/getting-started.md) — 从零开始的 step-by-step 教程（独立使用 + Tauri 集成）
-- [项目规范](docs/wrymium-spec.md) — 完整设计文档
-- [wry API 清单](docs/wry-api-surface.md) — tauri-runtime-wry 引用的全部 wry 符号
-- [IPC 深入分析](docs/ipc-deep-dive.md) — Tauri 2.x IPC 协议技术分析
-- [TODO](docs/TODO.md) — 遗留问题与 Spike 结果
+- [使用教程](docs/getting-started.md) — 从零开始的 step-by-step 教程
+- [性能评测](docs/benchmark.md) — wrymium vs Electron 对比
+- [项目规范](docs/wrymium-spec.md) — 架构设计
+- [TODO](docs/TODO.md) — 路线图和遗留问题
 
 ## 许可证
 
