@@ -74,11 +74,11 @@ wrap_render_process_handler! {
             drop(state);
 
             if script_count > 0 {
-                eprintln!("[wrymium:renderer] Cached {script_count} init scripts for browser {browser_id}");
+                wrymium_log!("[wrymium:renderer] Cached {script_count} init scripts for browser {browser_id}");
             }
 
             if needs_inject && script_count > 0 {
-                eprintln!("[wrymium:renderer] Deferred injection triggered for browser {browser_id}");
+                wrymium_log!("[wrymium:renderer] Deferred injection triggered for browser {browser_id}");
                 if let Some(mut frame) = ImplBrowser::main_frame(browser) {
                     let state = BROWSER_SCRIPTS.lock().unwrap();
                     if let Some(bs) = state.get(&browser_id) {
@@ -183,7 +183,7 @@ fn inject_ipc_bridge(context: &mut V8Context) {
     }
 
     ImplV8Context::exit(context);
-    eprintln!("[wrymium:renderer] Injected window.ipc.postMessage bridge");
+    wrymium_log!("[wrymium:renderer] Injected window.ipc.postMessage bridge");
 }
 
 // --- V8 Handler for window.ipc.postMessage ---

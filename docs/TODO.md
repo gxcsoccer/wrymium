@@ -286,78 +286,87 @@ impl IpcResourceHandlerInner {
 
 ## 下一阶段开发计划
 
-### P0：修复 WebView.browser 字段（v0.1 补丁）
+### P0：修复 WebView.browser 字段 ✅ DONE
 
-**问题**: `browser_host_create_browser` 是异步的，`WebView.browser` 在 `create()` 后永远是 `None`。导致 `evaluate_script`/`load_url`/`reload` 等方法创建后实际是空操作。
+`Arc<Mutex<Option<Browser>>>` 共享，`on_after_created` 存入。
 
-**方案**: 用 `Arc<Mutex<Option<Browser>>>` 共享 browser 引用：
-1. `WebView::create()` 创建 `Arc<Mutex<Option<Browser>>>` 存入 `WebView` 和 `WrymiumLifeSpanHandler`
-2. `on_after_created` 回调中将 `Browser` 存入 shared state
-3. `WebView` 的所有方法从 shared state 读取 browser
+### P1：POST body 提取 ✅ DONE
 
-**状态**: TODO
+`CefPostData` → `CefPostDataElement::GetBytes` 拼接。
 
----
+### P2：Response headers 传递 ✅ DONE
 
-### P1：实现 POST body 提取（v0.1 补丁）
+`CefStringMultimap::append` + `ImplResponse::set_header_map`。
 
-**问题**: `scheme.rs` 的 `extract_request_info` 始终返回空 body，导致 fetch-based IPC 的 POST 请求拿不到数据。
+### P3：Fork tauri-runtime-wry ✅ DONE
 
-**方案**: 通过 `ImplRequest::post_data()` 获取 `CefPostData`，遍历 `CefPostDataElement::GetBytes()` 拼接 body。
+~30 行 patch（NSView 指针、NewWindowResponse、traffic_light_inset、inner_size）。
 
-**状态**: TODO
+### P4：端到端 Tauri 示例 ✅ DONE
 
----
-
-### P2：补全 Response headers 传递（v0.1 补丁）
-
-**问题**: `CefResourceHandler::response_headers` 只设置了 status 和 Content-Type，CORS headers（`Access-Control-Allow-Origin`、`Access-Control-Expose-Headers`）和 Tauri 自定义 header（`Tauri-Response`）未传递。
-
-**方案**: 在 `response_headers` 中遍历 `http::Response` 的全部 headers，通过 `CefResponse::set_header_map` 写入。需要调查 cef-rs 是否暴露了 `set_header_map` 的 safe wrapper。
-
-**状态**: TODO
+Tauri 2.x app 通过 CEF 渲染，`tauri://localhost`、`__TAURI_INTERNALS__`、`window.ipc` 全部工作。
 
 ---
 
-### P3：Fork tauri-runtime-wry（v0.2 核心）
+### P5：Tauri invoke() 完整 IPC 往返 ✅ DONE
 
-**问题**: Spike 2 确认仅 patch wry 不够，必须同时 patch tauri-runtime-wry（5 个 RED blocker）。
+前端 `invoke('greet', { name: 'wrymium' })` → CEF fetch(`ipc://localhost/greet`) → wrymium scheme handler → Tauri command dispatch → Rust `greet()` → 200 OK 返回结果。
+
+关键修复：
+- POST body 提取从 `create()` 移到 `open()`（`create()` 时 body 未就绪）
+- `Vec<Option<PostDataElement>>` 需要 `vec![None; count]` 预分配
+- 添加 `browser_id → webview_id` 全局映射（`BROWSER_TO_WEBVIEW`），解决 "failed to acquire webview reference" 错误
+- `ResponseState` 新增 `Initial` 状态，`open()` 中转为 `Pending`
+
+---
+
+### P6：DevTools 支持 ✅ DONE
+
+通过 `CefBrowserHost::ShowDevTools()` / `CloseDevTools()` / `HasDevTools()` 实现。
+
+---
+
+### P7：evaluate_script 验证
+
+**问题**: `SharedBrowser` 设置后 `evaluate_script` 理论上可用，但有时序问题——browser 创建是异步的，`build()` 返回后立即调用 `evaluate_script` 可能 browser 还是 None。
+
+**状态**: TODO — 低优先级（Tauri 通过 IPC 通信，较少直接调用 evaluate_script）
+
+---
+
+### P8：Windows 支持（v0.3）
 
 **工作内容**:
-1. Fork `tauri-apps/tauri` 仓库的 `crates/tauri-runtime-wry/` 目录
-2. 修改 ~6 个文件 ~200 行：
-   - `lib.rs:5256-5269` — macOS `inner_size()` 改为读取 CEF browser view NSView frame
-   - `lib.rs:5132-5220` — Windows 焦点/全屏改为 `CefFocusHandler`/`CefDisplayHandler`（v0.3）
-   - `undecorated_resizing.rs:524-600` — Linux resize 改为 CEF widget 事件（v0.4）
-   - `webview.rs` — `Webview` 平台结构体改为 CEF 句柄类型
-   - `lib.rs:4821-4834` — `NewWindowResponse::Create` 使用 CEF 句柄
-   - `lib.rs:3916-3963` — `WithWebview` handler 打包 CEF 句柄
-3. 使用 `#[cfg(feature = "cef")]` 条件编译
+- `multi_threaded_message_loop = true` 消息泵
+- Windows extension traits（`WebViewExtWindows`、`WebViewBuilderExtWindows`）
+- tauri-runtime-wry patch：焦点/全屏 → `CefFocusHandler`/`CefDisplayHandler`
+- CEF DLLs 打包
+- `set_theme`、`scroll_bar_style` 支持
 
-**详细分析**: → [platform-trait-callsite-analysis.md](./platform-trait-callsite-analysis.md)
-
-**状态**: TODO
+**状态**: TODO — 中期
 
 ---
 
-### P4：端到端 Tauri 示例（v0.2 验证）
+### P9：Linux 支持（v0.4）
 
-**目标**: 用一个真实的 Tauri 2.x 应用验证 wrymium + patched tauri-runtime-wry 的完整链路。
+**工作内容**:
+- `g_timeout_add` 消息泵
+- Linux extension traits（`WebViewExtUnix`、`WebViewBuilderExtUnix`）
+- tauri-runtime-wry patch：`undecorated_resizing` → CEF widget 事件
+- `build_gtk` 兼容方法
 
-**步骤**:
-1. 创建标准 Tauri 2.x app（`cargo create-tauri-app`）
-2. 在 `Cargo.toml` 中添加双 patch：
-   ```toml
-   [patch.crates-io]
-   wry = { path = "../wrymium/wrymium" }
-   tauri-runtime-wry = { path = "../wrymium/tauri-runtime-wry" }
-   ```
-3. 在 `main.rs` 开头添加 CEF subprocess 检查
-4. 验证：窗口显示、前端渲染、`invoke()` IPC、DevTools
+**状态**: TODO — 中期
 
-**依赖**: P0 + P1 + P3 完成后才能做
+---
 
-**状态**: TODO
+### P10：上游贡献 + CI + 测试
+
+- 向 cef-rs 提交 CefSchemeHandlerFactory/CefV8Handler/CefRenderProcessHandler safe wrapper
+- GitHub Actions CI（三平台构建 + 测试）
+- Layer B/C/D 集成测试
+- 性能基准测试
+
+**状态**: TODO — 长期
 
 ---
 

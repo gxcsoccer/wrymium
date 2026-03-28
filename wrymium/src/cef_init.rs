@@ -36,7 +36,7 @@ pub fn run_cef_subprocess() -> i32 {
         // helper = true: path resolves as exe/../../../CEF.framework
         let loader = cef::library_loader::LibraryLoader::new(&exe, true);
         if !loader.load() {
-            eprintln!("[wrymium] Failed to load CEF library in subprocess");
+            wrymium_log!("[wrymium] Failed to load CEF library in subprocess");
             return 1;
         }
         let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
@@ -195,7 +195,7 @@ fn initialize_cef() -> Result<()> {
         )));
     }
 
-    eprintln!("[wrymium] CEF initialized successfully");
+    wrymium_log!("[wrymium] CEF initialized successfully");
 
     // 7. Install platform message pump (external_message_pump mode)
     install_message_pump();
@@ -242,7 +242,7 @@ wrap_browser_process_handler! {
 
     impl BrowserProcessHandler {
         fn on_context_initialized(&self) {
-            eprintln!("[wrymium] CEF context initialized");
+            wrymium_log!("[wrymium] CEF context initialized");
         }
     }
 }
@@ -282,7 +282,7 @@ fn install_message_pump() {
         CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopCommonModes);
     }
 
-    eprintln!("[wrymium] macOS CFRunLoopTimer installed at 30fps");
+    wrymium_log!("[wrymium] macOS CFRunLoopTimer installed at 30fps");
 }
 
 #[cfg(target_os = "linux")]
@@ -292,19 +292,19 @@ fn install_message_pump() {
         cef::do_message_loop_work();
         glib::ControlFlow::Continue
     });
-    eprintln!("[wrymium] Linux glib timeout installed at 30fps");
+    wrymium_log!("[wrymium] Linux glib timeout installed at 30fps");
 }
 
 #[cfg(target_os = "windows")]
 fn install_message_pump() {
     // Windows uses multi_threaded_message_loop = true, no pump needed.
-    eprintln!("[wrymium] Windows multi_threaded_message_loop enabled");
+    wrymium_log!("[wrymium] Windows multi_threaded_message_loop enabled");
 }
 
 /// Shutdown CEF. Should be called at application exit.
 pub fn shutdown() {
     if is_initialized() {
         cef::shutdown();
-        eprintln!("[wrymium] CEF shutdown complete");
+        wrymium_log!("[wrymium] CEF shutdown complete");
     }
 }

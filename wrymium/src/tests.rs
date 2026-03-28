@@ -332,4 +332,99 @@ mod lib_tests {
         assert!(v.contains("CEF"));
         assert!(v.contains("wrymium"));
     }
+
+    #[test]
+    fn is_cef_subprocess_false_in_tests() {
+        assert!(!crate::is_cef_subprocess());
+    }
+}
+
+#[cfg(test)]
+mod responder_tests {
+    use crate::webview::RequestAsyncResponder;
+    use std::borrow::Cow;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn responder_calls_closure() {
+        let received = Arc::new(Mutex::new(false));
+        let received_clone = received.clone();
+
+        let responder = RequestAsyncResponder::new(Box::new(move |response| {
+            assert_eq!(response.status(), 200);
+            *received_clone.lock().unwrap() = true;
+        }));
+
+        let response = http::Response::builder()
+            .status(200)
+            .body(Cow::from(b"ok".to_vec()))
+            .unwrap();
+
+        responder.respond(response);
+        assert!(*received.lock().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod scheme_tests {
+    use crate::scheme;
+
+    #[test]
+    fn register_browser_webview_mapping() {
+        scheme::register_browser_webview(42, "test-webview");
+        // Just verify it doesn't panic — actual lookup tested via integration
+    }
+}
+
+#[cfg(test)]
+mod builder_protocol_tests {
+    use crate::WebViewBuilder;
+    use std::borrow::Cow;
+
+    #[test]
+    fn builder_with_custom_protocol() {
+        let builder = WebViewBuilder::new()
+            .with_custom_protocol("test".to_string(), |_id, _req| {
+                http::Response::builder()
+                    .body(Cow::from(b"response".to_vec()))
+                    .unwrap()
+            });
+        assert_eq!(builder.custom_protocols.len(), 1);
+        assert_eq!(builder.custom_protocols[0].0, "test");
+    }
+
+    #[test]
+    fn builder_with_async_protocol() {
+        let builder = WebViewBuilder::new()
+            .with_asynchronous_custom_protocol("async-test".to_string(), |_id, _req, responder| {
+                responder.respond(
+                    http::Response::builder()
+                        .body(Cow::from(b"async response".to_vec()))
+                        .unwrap(),
+                );
+            });
+        assert_eq!(builder.custom_protocols.len(), 1);
+        assert_eq!(builder.custom_protocols[0].0, "async-test");
+    }
+
+    #[test]
+    fn builder_with_ipc_handler() {
+        let builder = WebViewBuilder::new()
+            .with_ipc_handler(|_req| {});
+        assert!(builder.ipc_handler.is_some());
+    }
+
+    #[test]
+    fn builder_with_event_handlers() {
+        let builder = WebViewBuilder::new()
+            .with_navigation_handler(|_url| true)
+            .with_document_title_changed_handler(|_title| {})
+            .with_on_page_load_handler(|_event, _url| {})
+            .with_drag_drop_handler(|_event| true);
+
+        assert!(builder.navigation_handler.is_some());
+        assert!(builder.document_title_changed_handler.is_some());
+        assert!(builder.on_page_load_handler.is_some());
+        assert!(builder.drag_drop_handler.is_some());
+    }
 }

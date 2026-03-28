@@ -3,6 +3,8 @@
 //! This crate provides a drop-in replacement for `wry` that uses the Chromium
 //! Embedded Framework (CEF) instead of platform-native WebView engines.
 
+#[macro_use]
+mod log;
 mod cef_init;
 mod context;
 mod error;

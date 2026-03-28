@@ -32,6 +32,7 @@ impl RequestAsyncResponder {
 
 /// Builder for constructing a `WebView`.
 pub struct WebViewBuilder<'a> {
+    #[allow(dead_code)]
     pub(crate) web_context: Option<&'a mut WebContext>,
     pub(crate) id: Option<String>,
     pub(crate) url: Option<String>,
@@ -372,6 +373,7 @@ pub(crate) type SharedBrowser = std::sync::Arc<std::sync::Mutex<Option<cef::Brow
 pub struct WebView {
     id: String,
     url: String,
+    #[allow(dead_code)]
     visible: bool,
     browser: SharedBrowser,
 }
@@ -434,11 +436,8 @@ impl WebView {
             std::sync::Arc::new(std::sync::Mutex::new(None));
 
         // Create CefClient with handlers
-        // Note: ipc_handler may not be Send+Sync, so we don't store it in the client
-        // (which crosses thread boundaries via CEF). Instead, IPC is handled via
-        // the custom protocol path (fetch-based).
-        // TODO: For postMessage fallback, need to dispatch back to main thread.
-        let mut client = WrymiumClient::new(None, shared_browser.clone());
+        let webview_id_for_client = id.clone();
+        let mut client = WrymiumClient::new(None, shared_browser.clone(), webview_id_for_client);
 
         // Browser settings
         let browser_settings = BrowserSettings::default();
@@ -488,7 +487,7 @@ impl WebView {
             )));
         }
 
-        eprintln!("[wrymium] Browser creation initiated: id={id}, url={url}");
+        wrymium_log!("[wrymium] Browser creation initiated: id={id}, url={url}");
 
         Ok(WebView {
             id,
@@ -535,9 +534,10 @@ impl WebView {
         self.load_url(url)
     }
 
-    pub fn load_html(&self, _html: &str) -> Result<()> {
-        // TODO: Use frame.load_string when CefFrame wrapper supports it
-        Ok(())
+    pub fn load_html(&self, html: &str) -> Result<()> {
+        let encoded = url::form_urlencoded::byte_serialize(html.as_bytes()).collect::<String>();
+        let data_url = format!("data:text/html,{encoded}");
+        self.load_url(&data_url)
     }
 
     pub fn reload(&self) -> Result<()> {
@@ -635,15 +635,32 @@ impl WebView {
     // --- DevTools ---
 
     pub fn open_devtools(&self) {
-        // TODO: browser_host.show_dev_tools(window_info, client, settings, point)
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
+            if let Some(host) = ImplBrowser::host(browser) {
+                let window_info = cef::WindowInfo::default();
+                let settings = BrowserSettings::default();
+                ImplBrowserHost::show_dev_tools(&host, Some(&window_info), None, Some(&settings), None);
+            }
+        }
     }
 
     pub fn close_devtools(&self) {
-        // TODO: browser_host.close_dev_tools()
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
+            if let Some(host) = ImplBrowser::host(browser) {
+                ImplBrowserHost::close_dev_tools(&host);
+            }
+        }
     }
 
     pub fn is_devtools_open(&self) -> bool {
-        // TODO: browser_host.has_dev_tools()
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
+            if let Some(host) = ImplBrowser::host(browser) {
+                return ImplBrowserHost::has_dev_tools(&host) != 0;
+            }
+        }
         false
     }
 
@@ -707,11 +724,12 @@ wrap_client! {
     pub struct WrymiumClient {
         ipc_handler: Option<std::sync::Arc<dyn Fn(http::Request<String>) + Send + Sync>>,
         shared_browser: SharedBrowser,
+        webview_id: String,
     }
 
     impl Client {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(WrymiumLifeSpanHandler::new(self.shared_browser.clone()))
+            Some(WrymiumLifeSpanHandler::new(self.shared_browser.clone(), self.webview_id.clone()))
         }
 
         fn display_handler(&self) -> Option<DisplayHandler> {
@@ -761,7 +779,7 @@ wrap_client! {
                 handler(request);
             }
 
-            eprintln!("[wrymium] IPC postMessage received from renderer");
+            wrymium_log!("[wrymium] IPC postMessage received from renderer");
             1 // handled
         }
     }
@@ -770,26 +788,38 @@ wrap_client! {
 wrap_life_span_handler! {
     struct WrymiumLifeSpanHandler {
         shared_browser: SharedBrowser,
+        webview_id: String,
     }
 
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             if let Some(browser) = browser {
-                let id = ImplBrowser::identifier(browser);
-                eprintln!("[wrymium] Browser created (id={id})");
+                let browser_id = ImplBrowser::identifier(browser);
+                wrymium_log!("[wrymium] Browser created (browser_id={browser_id}, webview_id={})", self.webview_id);
+                // Register browser ID → webview ID mapping for scheme handlers
+                crate::scheme::register_browser_webview(browser_id, &self.webview_id);
                 // Store the browser reference so WebView methods can use it
                 let mut guard = self.shared_browser.lock().unwrap();
                 *guard = Some(browser.clone());
             }
         }
 
-        fn on_before_close(&self, _browser: Option<&mut Browser>) {
-            eprintln!("[wrymium] Browser closing");
-            // Clear the shared browser reference
-            let mut guard = self.shared_browser.lock().unwrap();
-            *guard = None;
-            drop(guard);
-            quit_message_loop();
+        fn on_before_close(&self, browser: Option<&mut Browser>) {
+            wrymium_log!("[wrymium] Browser closing");
+            // Only clear the shared browser if this is our main browser
+            // (not a DevTools window or popup)
+            if let Some(browser) = browser {
+                let guard = self.shared_browser.lock().unwrap();
+                if let Some(ref stored) = *guard {
+                    if ImplBrowser::identifier(stored) == ImplBrowser::identifier(browser) {
+                        drop(guard);
+                        let mut guard = self.shared_browser.lock().unwrap();
+                        *guard = None;
+                        drop(guard);
+                        quit_message_loop();
+                    }
+                }
+            }
         }
     }
 }
@@ -798,10 +828,5 @@ wrap_display_handler! {
     struct WrymiumDisplayHandler;
 
     impl DisplayHandler {
-        fn on_title_change(&self, _browser: Option<&mut Browser>, title: Option<&CefString>) {
-            if let Some(title) = title {
-                eprintln!("[wrymium] Title changed: {}", title.to_string());
-            }
-        }
     }
 }

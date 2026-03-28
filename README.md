@@ -25,10 +25,13 @@ Working features:
 - `window.ipc.postMessage` V8 bridge (renderer -> browser IPC)
 - Cross-process initialization script injection via `extra_info` (with race condition handling)
 - wry-compatible `WebViewBuilder` (35+ methods) and `WebView` (20+ methods)
+- **Tauri `invoke()` IPC end-to-end** — frontend calls Rust commands, receives responses
 - Shared browser handle via `Arc<Mutex<Option<Browser>>>` for post-creation API calls
 - POST body extraction via `CefPostData` + response headers propagation
+- DevTools support (`open_devtools` / `close_devtools` / `is_devtools_open`)
 - macOS `.app` bundle with 5 helper apps (GPU, Renderer, Plugin, Alerts, Helper)
-- 34 unit tests
+- Debug-only logging via `wrymium_log!` macro (silent in release builds)
+- 41 unit tests, zero warnings
 
 ## Architecture
 
@@ -208,6 +211,7 @@ Initialization scripts are passed from the browser process to renderer subproces
 
 ## Documentation
 
+- [Getting Started / 使用教程](docs/getting-started.md) — step-by-step guide for standalone and Tauri integration
 - [Project Spec](docs/wrymium-spec.md) — full design document
 - [wry API Surface](docs/wry-api-surface.md) — inventory of wry symbols wrymium must implement
 - [IPC Deep Dive](docs/ipc-deep-dive.md) — Tauri 2.x IPC protocol analysis

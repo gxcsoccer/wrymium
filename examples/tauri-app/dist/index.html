@@ -19,13 +19,23 @@
     }
     .card h3 { margin-top: 0; color: #ffd93d; }
     code { background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; font-size: 14px; }
+    button {
+      padding: 10px 20px; font-size: 15px; cursor: pointer;
+      background: #e94560; color: #fff; border: none; border-radius: 8px; margin: 4px;
+    }
+    button:hover { background: #c73851; }
+    input {
+      padding: 10px; font-size: 15px; border-radius: 8px; border: 1px solid #555;
+      background: rgba(0,0,0,0.3); color: #eee; width: 200px;
+    }
     .status { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }
     .status.ok { background: #2ecc71; color: #000; }
+    .status.fail { background: #e74c3c; color: #fff; }
     .status.pending { background: #f39c12; color: #000; }
     #log {
       margin-top: 16px; padding: 16px; background: rgba(0,0,0,0.4);
       border-radius: 8px; font-family: monospace; font-size: 13px;
-      white-space: pre-wrap; min-height: 60px; max-height: 200px; overflow-y: auto;
+      white-space: pre-wrap; min-height: 100px; max-height: 300px; overflow-y: auto;
     }
   </style>
 </head>
@@ -36,7 +46,6 @@
   <div class="card">
     <h3>Runtime Info</h3>
     <p>User Agent: <code id="ua"></code></p>
-    <p>Platform: <code id="platform"></code></p>
     <p>URL: <code id="url"></code></p>
   </div>
 
@@ -45,6 +54,14 @@
     <p>Chromium engine: <span id="check-chromium" class="status pending">checking...</span></p>
     <p>window.__TAURI_INTERNALS__: <span id="check-tauri" class="status pending">checking...</span></p>
     <p>window.ipc: <span id="check-ipc" class="status pending">checking...</span></p>
+    <p>invoke() IPC: <span id="check-invoke" class="status pending">not tested</span></p>
+  </div>
+
+  <div class="card">
+    <h3>Test invoke()</h3>
+    <input type="text" id="name-input" value="wrymium" placeholder="Enter name">
+    <button onclick="testInvoke()">Call greet command</button>
+    <p id="greet-result" style="margin-top:12px;color:#2ecc71;font-size:16px;"></p>
   </div>
 
   <div class="card">
@@ -61,27 +78,51 @@
 
     function setStatus(id, ok, text) {
       const el = document.getElementById(id);
-      el.className = 'status ' + (ok ? 'ok' : 'pending');
-      el.textContent = text || (ok ? 'OK' : 'N/A');
+      el.className = 'status ' + (ok ? 'ok' : 'fail');
+      el.textContent = text || (ok ? 'OK' : 'Failed');
     }
 
     document.getElementById('ua').textContent = navigator.userAgent;
-    document.getElementById('platform').textContent = navigator.platform;
     document.getElementById('url').textContent = location.href;
 
     const isChromium = !!window.chrome || navigator.userAgent.includes('Chrome');
-    setStatus('check-chromium', isChromium, isChromium ? 'Chromium detected' : 'Not Chromium');
+    setStatus('check-chromium', isChromium, isChromium ? 'Chromium/CEF' : 'Not Chromium');
     log(isChromium ? '[OK] Running on Chromium/CEF' : '[WARN] Not Chromium');
 
     setTimeout(() => {
       const hasTauri = !!window.__TAURI_INTERNALS__;
       setStatus('check-tauri', hasTauri, hasTauri ? 'Available' : 'Not found');
-      log(hasTauri ? '[OK] Tauri internals available' : '[INFO] Tauri internals not injected');
+      log(hasTauri ? '[OK] __TAURI_INTERNALS__ available' : '[WARN] __TAURI_INTERNALS__ not found');
 
       const hasIpc = !!(window.ipc && typeof window.ipc.postMessage === 'function');
       setStatus('check-ipc', hasIpc, hasIpc ? 'Available' : 'Not found');
-      log(hasIpc ? '[OK] window.ipc.postMessage bridge active' : '[INFO] window.ipc not available');
-    }, 1000);
+      log(hasIpc ? '[OK] window.ipc.postMessage active' : '[WARN] window.ipc not available');
+
+      // Auto-test invoke
+      if (hasTauri && window.__TAURI_INTERNALS__.invoke) {
+        testInvoke();
+      }
+    }, 1500);
+
+    async function testInvoke() {
+      const name = document.getElementById('name-input').value || 'world';
+      log('[INVOKE] Calling greet("' + name + '")...');
+
+      try {
+        if (!window.__TAURI_INTERNALS__ || !window.__TAURI_INTERNALS__.invoke) {
+          throw new Error('__TAURI_INTERNALS__.invoke not available');
+        }
+
+        const result = await window.__TAURI_INTERNALS__.invoke('greet', { name });
+        log('[RESULT] ' + JSON.stringify(result));
+        setStatus('check-invoke', true, 'Working!');
+        document.getElementById('greet-result').textContent = result;
+      } catch (err) {
+        log('[ERROR] invoke failed: ' + err.message);
+        log('[DEBUG] Error details: ' + JSON.stringify(err, null, 2));
+        setStatus('check-invoke', false, 'Failed: ' + err.message);
+      }
+    }
   </script>
 </body>
 </html>

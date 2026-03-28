@@ -1,0 +1,12 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for wrymium tauri app",
+  "windows": ["*"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "core:app:default",
+      "allow": [{ "cmd": "greet" }]
+    }
+  ]
+}
