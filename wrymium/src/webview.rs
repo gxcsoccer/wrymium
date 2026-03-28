@@ -384,7 +384,7 @@ impl WebView {
         window: &W,
         _as_child: bool,
     ) -> Result<Self> {
-        let id = builder.id.unwrap_or_else(|| uuid_v4());
+        let id = builder.id.unwrap_or_else(|| next_webview_id());
         let visible = builder.visible;
 
         // Determine the URL to load — HTML content uses a data: URI
@@ -514,9 +514,14 @@ impl WebView {
     pub fn evaluate_script_with_callback(
         &self,
         js: &str,
-        _callback: impl FnOnce(String) + Send + 'static,
+        callback: impl FnOnce(String) + Send + 'static,
     ) -> Result<()> {
-        self.evaluate_script(js)
+        self.evaluate_script(js)?;
+        // CEF's ExecuteJavaScript doesn't return a result directly.
+        // Call back with empty string to unblock callers.
+        // TODO: Implement proper result capture via V8 message passing.
+        callback(String::new());
+        Ok(())
     }
 
     pub fn load_url(&self, url: &str) -> Result<()> {
@@ -685,7 +690,7 @@ impl WebView {
 }
 
 /// Generate a unique ID for webview labels.
-fn uuid_v4() -> String {
+fn next_webview_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -806,18 +811,19 @@ wrap_life_span_handler! {
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
             wrymium_log!("[wrymium] Browser closing");
-            // Only clear the shared browser if this is our main browser
-            // (not a DevTools window or popup)
             if let Some(browser) = browser {
-                let guard = self.shared_browser.lock().unwrap();
-                if let Some(ref stored) = *guard {
-                    if ImplBrowser::identifier(stored) == ImplBrowser::identifier(browser) {
-                        drop(guard);
-                        let mut guard = self.shared_browser.lock().unwrap();
-                        *guard = None;
-                        drop(guard);
-                        quit_message_loop();
-                    }
+                let browser_id = ImplBrowser::identifier(browser);
+                crate::scheme::unregister_browser_webview(browser_id);
+
+                let mut guard = self.shared_browser.lock().unwrap();
+                let is_main = guard
+                    .as_ref()
+                    .map(|stored| ImplBrowser::identifier(stored) == browser_id)
+                    .unwrap_or(false);
+                if is_main {
+                    *guard = None;
+                    drop(guard);
+                    quit_message_loop();
                 }
             }
         }

@@ -138,8 +138,12 @@ fn initialize_cef() -> Result<()> {
     // On macOS, set paths relative to the .app bundle and configure DYLD
     #[cfg(target_os = "macos")]
     {
-        let macos_dir = exe.parent().unwrap();
-        let contents_dir = macos_dir.parent().unwrap();
+        let macos_dir = exe.parent().ok_or_else(|| {
+            Error::CefError("Cannot determine MacOS dir from executable path".into())
+        })?;
+        let contents_dir = macos_dir.parent().ok_or_else(|| {
+            Error::CefError("Cannot determine Contents dir — is this a .app bundle?".into())
+        })?;
         let frameworks_dir = contents_dir.join("Frameworks");
 
         let framework_path = frameworks_dir.join("Chromium Embedded Framework.framework");
@@ -148,7 +152,9 @@ fn initialize_cef() -> Result<()> {
                 CefString::from(framework_path.to_str().unwrap_or_default());
         }
 
-        let app_dir = contents_dir.parent().unwrap();
+        let app_dir = contents_dir.parent().ok_or_else(|| {
+            Error::CefError("Cannot determine .app dir from bundle structure".into())
+        })?;
         settings.main_bundle_path =
             CefString::from(app_dir.to_str().unwrap_or_default());
 

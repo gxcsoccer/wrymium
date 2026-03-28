@@ -5239,7 +5239,6 @@ dependencies = [
  "objc2-foundation",
  "once_cell",
  "raw-window-handle",
- "thiserror 2.0.18",
  "url",
  "windows 0.62.2",
 ]

@@ -34,6 +34,11 @@ pub fn register_browser_webview(browser_id: i32, webview_id: &str) {
         .insert(browser_id, webview_id.to_string());
 }
 
+/// Remove a browser → webview mapping when the browser is destroyed.
+pub fn unregister_browser_webview(browser_id: i32) {
+    BROWSER_TO_WEBVIEW.lock().unwrap().remove(&browser_id);
+}
+
 /// Get the wry webview ID from a CEF browser ID.
 fn get_webview_id(browser_id: i32) -> String {
     BROWSER_TO_WEBVIEW
@@ -121,8 +126,12 @@ wrap_scheme_handler_factory! {
 
 // --- ResourceHandler ---
 
-/// Wrapper to make Callback Send-safe.
-/// SAFETY: CEF callbacks are ref-counted and designed to be called from the IO thread.
+/// Wrapper to make CefCallback Send-safe.
+///
+/// SAFETY: CefCallback::Continue() is documented as callable from any thread.
+/// Internally it posts a task to the IO thread via Chromium's task runner.
+/// The CefCallback is ref-counted (CefRefCounted) so the pointer remains valid.
+/// See: https://magpcss.org/ceforum/apidocs3/projects/(default)/CefCallback.html
 struct SendableCallback(Callback);
 unsafe impl Send for SendableCallback {}
 
