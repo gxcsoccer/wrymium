@@ -373,6 +373,45 @@ fn run_benchmarks(webview: &wry::WebView) {
     }
 
     // ------------------------------------------------------------------
+    // 13. screenshot_fast (JPEG q60 — optimized for LLM observe)
+    // ------------------------------------------------------------------
+    {
+        let mut b = BenchResult::new("screenshot_fast (JPEG q60)");
+        for _ in 0..100 {
+            let t = Instant::now();
+            let _ = webview.screenshot_fast();
+            b.record(t.elapsed());
+        }
+        b.print();
+    }
+
+    // ------------------------------------------------------------------
+    // 14. accessibility_tree_compact
+    // ------------------------------------------------------------------
+    {
+        let mut b = BenchResult::new("a11y_tree_compact (basic.html)");
+        for _ in 0..100 {
+            let t = Instant::now();
+            let _ = webview.accessibility_tree_compact();
+            b.record(t.elapsed());
+        }
+        b.print();
+    }
+
+    // ------------------------------------------------------------------
+    // 15. interactive_elements
+    // ------------------------------------------------------------------
+    {
+        let mut b = BenchResult::new("interactive_elements (basic.html)");
+        for _ in 0..100 {
+            let t = Instant::now();
+            let _ = webview.interactive_elements();
+            b.record(t.elapsed());
+        }
+        b.print();
+    }
+
+    // ------------------------------------------------------------------
     // Summary
     // ------------------------------------------------------------------
     println!("\n================================================================");

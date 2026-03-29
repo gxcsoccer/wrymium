@@ -265,6 +265,16 @@ impl WebView {
 // ---------------------------------------------------------------------------
 
 impl WebView {
+    /// Take a fast screenshot optimized for LLM observation.
+    /// Uses JPEG quality 60 — much faster than PNG and sufficient for vision models.
+    pub fn screenshot_fast(&self) -> CdpResult<Vec<u8>> {
+        self.screenshot(&ScreenshotOptions {
+            format: Some("jpeg".into()),
+            quality: Some(60),
+            ..Default::default()
+        })
+    }
+
     /// Take a screenshot. Returns PNG (or JPEG) image bytes.
     pub fn screenshot(&self, opts: &ScreenshotOptions) -> CdpResult<Vec<u8>> {
         let mut params = serde_json::json!({});
@@ -460,71 +470,72 @@ impl WebView {
 
 impl WebView {
     /// Find a single element by CSS selector.
+    ///
+    /// Uses a single JS evaluate (1 CDP roundtrip) instead of
+    /// DOM.getDocument + DOM.querySelector + DOM.getBoxModel (3 roundtrips).
     pub fn find_element(&self, selector: &str) -> CdpResult<Element> {
-        // Get document root
-        let doc = self.cdp_quick("DOM.getDocument", serde_json::json!({}))?;
-        let root_id = doc["root"]["nodeId"]
-            .as_i64()
-            .ok_or_else(|| CdpError::Json("missing root nodeId".into()))?;
-
-        // Query selector
-        let result = self.cdp_quick(
-            "DOM.querySelector",
-            serde_json::json!({
-                "nodeId": root_id,
-                "selector": selector,
-            }),
-        )?;
-
-        let node_id = result["nodeId"]
-            .as_i64()
-            .ok_or_else(|| CdpError::Json("element not found".into()))?;
-
-        if node_id == 0 {
+        let js = format!(
+            r#"(() => {{
+                const el = document.querySelector({sel});
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return JSON.stringify({{x:r.x, y:r.y, w:r.width, h:r.height}});
+            }})()"#,
+            sel = serde_json::to_string(selector).unwrap_or_else(|_| "\"\"".into()),
+        );
+        let result = self.evaluate(&js)?;
+        if result.is_null() {
             return Err(CdpError::Json(format!("no element matches '{selector}'")));
         }
-
-        // Get bounding box
-        let bounds = self.get_element_bounds(node_id).ok();
+        let json_str = result.as_str()
+            .ok_or_else(|| CdpError::Json("find_element JS returned non-string".into()))?;
+        let v: serde_json::Value = serde_json::from_str(json_str)
+            .map_err(|e| CdpError::Json(e.to_string()))?;
 
         Ok(Element {
-            node_id,
-            bounds,
+            node_id: 0, // not used in JS-based approach
+            bounds: Some(ElementBounds {
+                x: v["x"].as_f64().unwrap_or(0.0),
+                y: v["y"].as_f64().unwrap_or(0.0),
+                width: v["w"].as_f64().unwrap_or(0.0),
+                height: v["h"].as_f64().unwrap_or(0.0),
+            }),
             selector: selector.to_string(),
         })
     }
 
     /// Find all elements matching a CSS selector.
+    ///
+    /// Single JS evaluate (1 CDP roundtrip).
     pub fn find_elements(&self, selector: &str) -> CdpResult<Vec<Element>> {
-        let doc = self.cdp_quick("DOM.getDocument", serde_json::json!({}))?;
-        let root_id = doc["root"]["nodeId"]
-            .as_i64()
-            .ok_or_else(|| CdpError::Json("missing root nodeId".into()))?;
+        let js = format!(
+            r#"(() => {{
+                const els = document.querySelectorAll({sel});
+                const results = [];
+                els.forEach(el => {{
+                    const r = el.getBoundingClientRect();
+                    results.push({{x:r.x, y:r.y, w:r.width, h:r.height}});
+                }});
+                return JSON.stringify(results);
+            }})()"#,
+            sel = serde_json::to_string(selector).unwrap_or_else(|_| "\"\"".into()),
+        );
+        let result = self.evaluate(&js)?;
+        let json_str = result.as_str()
+            .ok_or_else(|| CdpError::Json("find_elements JS returned non-string".into()))?;
+        let arr: Vec<serde_json::Value> = serde_json::from_str(json_str)
+            .map_err(|e| CdpError::Json(e.to_string()))?;
 
-        let result = self.cdp_quick(
-            "DOM.querySelectorAll",
-            serde_json::json!({
-                "nodeId": root_id,
-                "selector": selector,
+        Ok(arr.into_iter().map(|v| Element {
+            node_id: 0,
+            bounds: Some(ElementBounds {
+                x: v["x"].as_f64().unwrap_or(0.0),
+                y: v["y"].as_f64().unwrap_or(0.0),
+                width: v["w"].as_f64().unwrap_or(0.0),
+                height: v["h"].as_f64().unwrap_or(0.0),
             }),
-        )?;
-
-        let node_ids = result["nodeIds"]
-            .as_array()
-            .ok_or_else(|| CdpError::Json("missing nodeIds".into()))?;
-
-        let mut elements = Vec::new();
-        for nid in node_ids {
-            if let Some(id) = nid.as_i64() {
-                let bounds = self.get_element_bounds(id).ok();
-                elements.push(Element {
-                    node_id: id,
-                    bounds,
-                    selector: selector.to_string(),
-                });
-            }
-        }
-        Ok(elements)
+            selector: selector.to_string(),
+        }).collect())
     }
 
     /// List all frames in the page.
@@ -533,36 +544,6 @@ impl WebView {
         let mut frames = Vec::new();
         collect_frames(&result["frameTree"], &mut frames);
         Ok(frames)
-    }
-
-    /// Get bounding box for a DOM node (in viewport coordinates, per CEF's DOM.getBoxModel).
-    fn get_element_bounds(&self, node_id: i64) -> CdpResult<ElementBounds> {
-        let result = self.cdp_quick(
-            "DOM.getBoxModel",
-            serde_json::json!({ "nodeId": node_id }),
-        )?;
-
-        // content quad: [x1,y1, x2,y2, x3,y3, x4,y4]
-        // For non-rotated elements: top-left, top-right, bottom-right, bottom-left
-        let content = result["model"]["content"]
-            .as_array()
-            .ok_or_else(|| CdpError::Json("missing box model content".into()))?;
-
-        if content.len() < 8 {
-            return Err(CdpError::Json("incomplete box model quad".into()));
-        }
-
-        let x1 = content[0].as_f64().unwrap_or(0.0);
-        let y1 = content[1].as_f64().unwrap_or(0.0);
-        let x3 = content[4].as_f64().unwrap_or(0.0); // bottom-right x
-        let y3 = content[5].as_f64().unwrap_or(0.0); // bottom-right y
-
-        Ok(ElementBounds {
-            x: x1,
-            y: y1,
-            width: x3 - x1,
-            height: y3 - y1,
-        })
     }
 }
 
@@ -619,20 +600,31 @@ impl WebView {
 
     /// High-level click on an element by CSS selector.
     ///
-    /// Uses `DOM.getBoxModel` to get element bounds. In CEF's implementation,
-    /// the content quad is returned in **viewport coordinates** (already adjusted
-    /// for scroll offset), so no additional scroll compensation is needed.
+    /// Single JS evaluate to get viewport center coords + native click.
+    /// Total: 1 CDP roundtrip + 1 native call (previously 4 CDP roundtrips).
     pub fn click_element(&self, selector: &str) -> CdpResult<()> {
-        let element = self.find_element(selector)?;
-        let bounds = element
-            .bounds
-            .ok_or_else(|| CdpError::Json("element has no bounds".into()))?;
+        let js = format!(
+            r#"(() => {{
+                const el = document.querySelector({sel});
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return JSON.stringify({{x: r.x + r.width/2, y: r.y + r.height/2}});
+            }})()"#,
+            sel = serde_json::to_string(selector).unwrap_or_else(|_| "\"\"".into()),
+        );
+        let result = self.evaluate(&js)?;
+        if result.is_null() {
+            return Err(CdpError::Json(format!("click_element: no element matches '{selector}'")));
+        }
+        let json_str = result.as_str()
+            .ok_or_else(|| CdpError::Json("click_element JS returned non-string".into()))?;
+        let v: serde_json::Value = serde_json::from_str(json_str)
+            .map_err(|e| CdpError::Json(e.to_string()))?;
 
-        // Element center — already in viewport coordinates from DOM.getBoxModel
-        let center_x = (bounds.x + bounds.width / 2.0) as i32;
-        let center_y = (bounds.y + bounds.height / 2.0) as i32;
+        let x = v["x"].as_f64().ok_or_else(|| CdpError::Json("no x".into()))? as i32;
+        let y = v["y"].as_f64().ok_or_else(|| CdpError::Json("no y".into()))? as i32;
 
-        self.click(center_x, center_y)
+        self.click(x, y)
             .map_err(|e| CdpError::Json(format!("click failed: {e}")))
     }
 

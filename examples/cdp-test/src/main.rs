@@ -356,11 +356,8 @@ fn run_cdp_tests(webview: &wry::WebView) -> i32 {
     // -----------------------------------------------------------------------
     // Test 11: browser_use::find_element
     // -----------------------------------------------------------------------
-    test!("find_element(\"#test-btn\") finds button", {
+    test!("find_element(\"#test-btn\") finds button with bounds", {
         let el = webview.find_element("#test-btn").map_err(|e| e.to_string())?;
-        if el.node_id == 0 {
-            return Err("node_id is 0".into());
-        }
         let bounds = el.bounds.ok_or("no bounds")?;
         if bounds.width <= 0.0 || bounds.height <= 0.0 {
             return Err(format!("invalid bounds: {}x{}", bounds.width, bounds.height));
@@ -711,8 +708,9 @@ fn run_cdp_tests(webview: &wry::WebView) -> i32 {
         let el = webview
             .wait_for_selector(".item", Duration::from_secs(5))
             .map_err(|e| e.to_string())?;
-        if el.node_id == 0 {
-            return Err("node_id is 0".into());
+        // Verify bounds exist (element was found)
+        if el.bounds.is_none() {
+            return Err("no bounds".into());
         }
         Ok(())
     });
