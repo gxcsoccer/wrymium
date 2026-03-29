@@ -2974,6 +2974,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wrymium-bench"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "serde_json",
+ "tao",
+ "wry",
+]
+
+[[package]]
 name = "wrymium-feishu-example"
 version = "0.1.0"
 dependencies = [

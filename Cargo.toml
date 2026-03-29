@@ -1,5 +1,5 @@
 [workspace]
-members = ["wrymium", "examples/basic", "examples/feishu", "examples/cdp-test", "xtask", "cargo-wrymium"]
+members = ["wrymium", "examples/basic", "examples/feishu", "examples/cdp-test", "examples/bench", "xtask", "cargo-wrymium"]
 exclude = ["examples/tauri-app/src-tauri"]
 resolver = "2"
 
