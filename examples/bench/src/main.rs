@@ -386,13 +386,26 @@ fn run_benchmarks(webview: &wry::WebView) {
     }
 
     // ------------------------------------------------------------------
-    // 14. accessibility_tree_compact
+    // 14. accessibility_tree_compact (CDP-based)
     // ------------------------------------------------------------------
     {
-        let mut b = BenchResult::new("a11y_tree_compact (basic.html)");
+        let mut b = BenchResult::new("a11y_tree_compact (CDP-based)");
         for _ in 0..100 {
             let t = Instant::now();
             let _ = webview.accessibility_tree_compact();
+            b.record(t.elapsed());
+        }
+        b.print();
+    }
+
+    // ------------------------------------------------------------------
+    // 14b. accessibility_tree_fast (JS-based, single roundtrip)
+    // ------------------------------------------------------------------
+    {
+        let mut b = BenchResult::new("a11y_tree_fast (JS, 1 roundtrip)");
+        for _ in 0..100 {
+            let t = Instant::now();
+            let _ = webview.accessibility_tree_fast();
             b.record(t.elapsed());
         }
         b.print();

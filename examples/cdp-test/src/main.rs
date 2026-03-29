@@ -514,6 +514,26 @@ fn run_cdp_tests(webview: &wry::WebView) -> i32 {
     // -----------------------------------------------------------------------
     // Test 19: interactive_elements
     // -----------------------------------------------------------------------
+    // -----------------------------------------------------------------------
+    // Test 19b: accessibility_tree_fast (JS-based)
+    // -----------------------------------------------------------------------
+    test!("accessibility_tree_fast() returns compact text via JS", {
+        let fast = webview.accessibility_tree_fast().map_err(|e| e.to_string())?;
+        if fast.is_empty() {
+            return Err("empty".into());
+        }
+        if !fast.contains("[") {
+            return Err(format!("no role markers: {}", &fast[..200.min(fast.len())]));
+        }
+        // Should contain our page elements
+        let has_content = fast.contains("button") || fast.contains("Click Me");
+        if !has_content {
+            return Err(format!("missing expected content:\n{fast}"));
+        }
+        eprintln!("    [info] fast a11y tree: {} chars", fast.len());
+        Ok(())
+    });
+
     test!("interactive_elements() finds button + input + link", {
         let elements = webview.interactive_elements().map_err(|e| e.to_string())?;
         if elements.is_empty() {
