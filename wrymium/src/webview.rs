@@ -756,6 +756,22 @@ impl WebView {
         guard.as_ref().map(|bridge| bridge.subscribe())
     }
 
+    /// Number of pending (in-flight) CDP requests.
+    pub fn cdp_pending_count(&self) -> usize {
+        self.cdp_bridge.lock().unwrap()
+            .as_ref()
+            .map(|b| b.pending_count())
+            .unwrap_or(0)
+    }
+
+    /// Number of active CDP event subscribers.
+    pub fn cdp_subscriber_count(&self) -> usize {
+        self.cdp_bridge.lock().unwrap()
+            .as_ref()
+            .map(|b| b.subscriber_count())
+            .unwrap_or(0)
+    }
+
     // --- Static methods ---
 
     pub fn fetch_data_store_identifiers(

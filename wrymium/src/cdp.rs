@@ -317,6 +317,16 @@ impl CdpBridge {
         rx
     }
 
+    /// Number of pending (in-flight) CDP requests.
+    pub fn pending_count(&self) -> usize {
+        self.inner.pending.lock().unwrap().len()
+    }
+
+    /// Number of active event subscribers.
+    pub fn subscriber_count(&self) -> usize {
+        self.inner.event_subscribers.lock().unwrap().len()
+    }
+
     /// Fire-and-forget: enable core CDP domains needed by Browser Use.
     ///
     /// Called during initialization (from on_after_created, which is synchronous).

@@ -796,6 +796,234 @@ fn run_cdp_tests(webview: &wry::WebView) -> i32 {
         Ok(())
     });
 
+    // ===================================================================
+    // Reliability Tests
+    // ===================================================================
+    println!("\n  --- Reliability ---\n");
+
+    // Navigate back to basic for remaining tests
+    let _ = webview.navigate(&basic_fixture_url, false);
+    std::thread::sleep(Duration::from_secs(1));
+
+    // -----------------------------------------------------------------------
+    // Test R1: No pending request leaks after 1000 calls
+    // -----------------------------------------------------------------------
+    test!("no pending leaks after 1000 cdp_send_blocking", {
+        let before = webview.cdp_pending_count();
+        for _ in 0..1000 {
+            let _ = webview.cdp_send_blocking(
+                "Runtime.evaluate",
+                serde_json::json!({"expression": "1", "returnByValue": true}),
+                Duration::from_secs(5),
+            );
+        }
+        let after = webview.cdp_pending_count();
+        if after > before {
+            return Err(format!("pending leaked: before={before}, after={after}"));
+        }
+        Ok(())
+    });
+
+    // -----------------------------------------------------------------------
+    // Test R2: No pending leaks after dispatch + receive
+    // -----------------------------------------------------------------------
+    test!("no pending leaks after 100 dispatch+recv", {
+        for _ in 0..100 {
+            let (_id, rx) = webview.cdp_dispatch(
+                "Runtime.evaluate",
+                serde_json::json!({"expression": "1", "returnByValue": true}),
+            ).map_err(|e| e.to_string())?;
+            // Pump until received
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if rx.try_recv().is_ok() { break; }
+                if Instant::now() > deadline {
+                    return Err("dispatch timed out".into());
+                }
+                let _ = webview.cdp_send_blocking(
+                    "Runtime.evaluate",
+                    serde_json::json!({"expression": "0", "returnByValue": true}),
+                    Duration::from_millis(10),
+                );
+            }
+        }
+        let pending = webview.cdp_pending_count();
+        if pending > 0 {
+            return Err(format!("pending leaked: {pending}"));
+        }
+        Ok(())
+    });
+
+    // -----------------------------------------------------------------------
+    // Test R3: Dropped receivers don't leak pending entries
+    // -----------------------------------------------------------------------
+    test!("dropped receivers cleaned up eventually", {
+        // Dispatch 50 calls and immediately drop the receivers
+        for _ in 0..50 {
+            let _ = webview.cdp_dispatch(
+                "Runtime.evaluate",
+                serde_json::json!({"expression": "1", "returnByValue": true}),
+            );
+            // Receiver dropped here — sender will fail on next observer callback
+        }
+        // Pump to let observer try to send (will fail, removing pending entries)
+        for _ in 0..100 {
+            let _ = webview.cdp_send_blocking(
+                "Runtime.evaluate",
+                serde_json::json!({"expression": "1", "returnByValue": true}),
+                Duration::from_millis(100),
+            );
+        }
+        // Pending should be 0 (all responses came back, senders succeeded or failed)
+        let pending = webview.cdp_pending_count();
+        // Some may remain if responses haven't arrived yet, but should be small
+        if pending > 5 {
+            return Err(format!("too many pending after drop: {pending}"));
+        }
+        Ok(())
+    });
+
+    // -----------------------------------------------------------------------
+    // Test R4: Subscriber cleanup on drop
+    // -----------------------------------------------------------------------
+    test!("subscriber cleaned up after receiver drop", {
+        let before = webview.cdp_subscriber_count();
+        {
+            let _rx = webview.cdp_subscribe();
+            let during = webview.cdp_subscriber_count();
+            if during != before + 1 {
+                return Err(format!("subscribe didn't add: before={before}, during={during}"));
+            }
+            // _rx dropped here
+        }
+        // Trigger a broadcast to clean up dead subscriber
+        webview.navigate(&basic_fixture_url, false).map_err(|e| e.to_string())?;
+        std::thread::sleep(Duration::from_millis(500));
+        // Pump events
+        let _ = webview.cdp_send_blocking(
+            "Runtime.evaluate",
+            serde_json::json!({"expression": "1", "returnByValue": true}),
+            Duration::from_secs(1),
+        );
+        std::thread::sleep(Duration::from_millis(500));
+
+        let after = webview.cdp_subscriber_count();
+        if after > before {
+            return Err(format!("subscriber leaked: before={before}, after={after}"));
+        }
+        Ok(())
+    });
+
+    // -----------------------------------------------------------------------
+    // Test R5: Timeout returns CdpError::Timeout, doesn't hang
+    // -----------------------------------------------------------------------
+    test!("short timeout returns Timeout error (no hang)", {
+        // Call with a very short timeout — the response should arrive but
+        // we test that the timeout mechanism works and doesn't block forever
+        let start = Instant::now();
+        let result = webview.cdp_send_blocking(
+            "Runtime.evaluate",
+            // A slow expression that takes ~100ms
+            serde_json::json!({
+                "expression": "new Promise(r => setTimeout(r, 2000))",
+                "awaitPromise": true,
+                "returnByValue": true,
+            }),
+            Duration::from_millis(200), // timeout before promise resolves
+        );
+        let elapsed = start.elapsed();
+
+        match result {
+            Err(wry::cdp::CdpError::Timeout) => {
+                if elapsed > Duration::from_secs(3) {
+                    return Err(format!("timeout took too long: {elapsed:?}"));
+                }
+                Ok(())
+            }
+            Ok(_) => {
+                // Response arrived before timeout — that's also fine
+                // (promise might resolve faster than expected)
+                if elapsed < Duration::from_millis(100) {
+                    Ok(()) // fast response, acceptable
+                } else {
+                    Err(format!("expected Timeout but got Ok in {elapsed:?}"))
+                }
+            }
+            Err(e) => Err(format!("expected Timeout, got: {e}")),
+        }
+    });
+
+    // -----------------------------------------------------------------------
+    // Test R6: Rapid fire stress test (100 concurrent + immediate receive)
+    // -----------------------------------------------------------------------
+    test!("stress: 100 rapid-fire concurrent dispatches", {
+        let mut receivers = Vec::new();
+        for i in 0..100 {
+            match webview.cdp_dispatch(
+                "Runtime.evaluate",
+                serde_json::json!({"expression": format!("{i}"), "returnByValue": true}),
+            ) {
+                Ok((_id, rx)) => receivers.push(rx),
+                Err(e) => return Err(format!("dispatch {i} failed: {e}")),
+            }
+        }
+
+        // Collect all results
+        let mut received = 0;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while received < receivers.len() && Instant::now() < deadline {
+            for rx in &receivers {
+                if rx.try_recv().is_ok() {
+                    received += 1;
+                }
+            }
+            let _ = webview.cdp_send_blocking(
+                "Runtime.evaluate",
+                serde_json::json!({"expression": "0", "returnByValue": true}),
+                Duration::from_millis(10),
+            );
+        }
+
+        if received < 95 {
+            return Err(format!("only received {received}/100 responses"));
+        }
+
+        // Pump remaining to flush pending
+        for _ in 0..50 {
+            let _ = webview.cdp_send_blocking(
+                "Runtime.evaluate",
+                serde_json::json!({"expression": "0", "returnByValue": true}),
+                Duration::from_millis(10),
+            );
+        }
+        let pending = webview.cdp_pending_count();
+        if pending > 2 {
+            return Err(format!("pending leak after stress: {pending}"));
+        }
+        Ok(())
+    });
+
+    // -----------------------------------------------------------------------
+    // Test R7: Evaluate after navigate (browser context change)
+    // -----------------------------------------------------------------------
+    test!("evaluate works after multiple navigations", {
+        for i in 0..5 {
+            let url = if i % 2 == 0 {
+                fixture_url("basic.html")
+            } else {
+                fixture_url("form.html")
+            };
+            webview.navigate(&url, false).map_err(|e| e.to_string())?;
+            std::thread::sleep(Duration::from_millis(500));
+
+            let result = webview.evaluate("document.title").map_err(|e| e.to_string())?;
+            if result.is_null() || result.as_str().unwrap_or("").is_empty() {
+                return Err(format!("empty title on navigation {i}"));
+            }
+        }
+        Ok(())
+    });
+
     // -----------------------------------------------------------------------
     // Summary
     // -----------------------------------------------------------------------
