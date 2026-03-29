@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>SPA Test</title></head>
+<body>
+  <nav>
+    <a href="#" onclick="navigate('/home')">Home</a>
+    <a href="#" onclick="navigate('/products')">Products</a>
+    <a href="#" onclick="navigate('/about')">About</a>
+  </nav>
+  <main id="content">
+    <h1>Home</h1>
+    <p>Welcome to the SPA test page.</p>
+  </main>
+  <script>
+    const pages = {
+      '/home': '<h1>Home</h1><p>Welcome to the SPA test page.</p>',
+      '/products': '<h1>Products</h1><div id="product-list"></div>',
+      '/about': '<h1>About</h1><p>This is a test SPA.</p>',
+    };
+    function navigate(path) {
+      history.pushState({}, '', path);
+      const content = document.getElementById('content');
+      content.innerHTML = pages[path] || '<h1>404</h1>';
+      if (path === '/products') loadProducts();
+    }
+    function loadProducts() {
+      setTimeout(() => {
+        const list = document.getElementById('product-list');
+        if (!list) return;
+        list.innerHTML = `
+          <div class="product" data-price="29.99"><h2>Widget A</h2><span class="price">$29.99</span></div>
+          <div class="product" data-price="49.99"><h2>Widget B</h2><span class="price">$49.99</span></div>
+          <div class="product" data-price="19.99"><h2>Widget C</h2><span class="price">$19.99</span></div>
+        `;
+        window.__productsLoaded = true;
+      }, 1000);
+    }
+  </script>
+</body>
+</html>

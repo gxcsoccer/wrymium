@@ -428,3 +428,246 @@ mod builder_protocol_tests {
         assert!(builder.drag_drop_handler.is_some());
     }
 }
+
+// ==========================================================================
+// CDP Bridge unit tests (no CEF runtime needed)
+// ==========================================================================
+
+#[cfg(test)]
+mod cdp_tests {
+    use crate::cdp::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn cdp_error_display() {
+        assert_eq!(CdpError::Timeout.to_string(), "CDP call timed out");
+        assert_eq!(CdpError::AgentDetached.to_string(), "DevTools agent detached");
+        assert_eq!(CdpError::ChannelClosed.to_string(), "CDP response channel closed");
+        assert_eq!(CdpError::NotReady.to_string(), "browser not ready");
+        assert_eq!(CdpError::SendFailed(0).to_string(), "send_dev_tools_message failed: 0");
+        assert_eq!(
+            CdpError::Json("bad json".into()).to_string(),
+            "CDP JSON error: bad json"
+        );
+        let v = serde_json::json!({"code": -32601, "message": "method not found"});
+        assert!(CdpError::MethodFailed(v).to_string().contains("method not found"));
+    }
+
+    #[test]
+    fn cdp_event_params_json_empty() {
+        let event = CdpEvent {
+            method: "Page.loadEventFired".into(),
+            params: vec![],
+        };
+        let v = event.params_json().unwrap();
+        assert!(v.is_null());
+    }
+
+    #[test]
+    fn cdp_event_params_json_valid() {
+        let event = CdpEvent {
+            method: "Page.frameNavigated".into(),
+            params: br#"{"frameId":"abc"}"#.to_vec(),
+        };
+        let v = event.params_json().unwrap();
+        assert_eq!(v["frameId"], "abc");
+    }
+
+    #[test]
+    fn cdp_event_params_json_invalid() {
+        let event = CdpEvent {
+            method: "test".into(),
+            params: b"not json".to_vec(),
+        };
+        assert!(event.params_json().is_err());
+    }
+
+    #[test]
+    fn cdp_bridge_inner_complete_request() {
+        let inner = CdpBridgeInner::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        inner.pending.lock().unwrap().insert(42, tx);
+
+        inner.complete_request(42, Ok(serde_json::json!({"result": "ok"})));
+
+        let result = rx.recv().unwrap().unwrap();
+        assert_eq!(result["result"], "ok");
+        assert!(inner.pending.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn cdp_bridge_inner_complete_missing_id() {
+        let inner = CdpBridgeInner::new();
+        // Should not panic when completing a non-existent request
+        inner.complete_request(999, Ok(serde_json::json!(null)));
+    }
+
+    #[test]
+    fn cdp_bridge_inner_drain_all_pending() {
+        let inner = CdpBridgeInner::new();
+        let (tx1, rx1) = std::sync::mpsc::channel();
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        inner.pending.lock().unwrap().insert(1, tx1);
+        inner.pending.lock().unwrap().insert(2, tx2);
+
+        inner.drain_all_pending(|| CdpError::AgentDetached);
+
+        assert!(inner.pending.lock().unwrap().is_empty());
+        assert!(matches!(rx1.recv().unwrap(), Err(CdpError::AgentDetached)));
+        assert!(matches!(rx2.recv().unwrap(), Err(CdpError::AgentDetached)));
+    }
+
+    #[test]
+    fn cdp_bridge_inner_broadcast_event() {
+        let inner = CdpBridgeInner::new();
+        let (tx1, rx1) = std::sync::mpsc::channel();
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        inner.event_subscribers.lock().unwrap().push(tx1);
+        inner.event_subscribers.lock().unwrap().push(tx2);
+
+        let event = CdpEvent {
+            method: "Page.loadEventFired".into(),
+            params: vec![],
+        };
+        inner.broadcast_event(event);
+
+        assert_eq!(rx1.recv().unwrap().method, "Page.loadEventFired");
+        assert_eq!(rx2.recv().unwrap().method, "Page.loadEventFired");
+    }
+
+    #[test]
+    fn cdp_bridge_inner_broadcast_removes_closed_channels() {
+        let inner = CdpBridgeInner::new();
+        let (tx1, _rx1_dropped) = std::sync::mpsc::channel::<CdpEvent>();
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        inner.event_subscribers.lock().unwrap().push(tx1);
+        inner.event_subscribers.lock().unwrap().push(tx2);
+
+        // Drop rx1 — tx1 send will fail
+        drop(_rx1_dropped);
+
+        let event = CdpEvent {
+            method: "test".into(),
+            params: vec![],
+        };
+        inner.broadcast_event(event);
+
+        // tx1 should be removed, only tx2 remains
+        assert_eq!(inner.event_subscribers.lock().unwrap().len(), 1);
+        assert_eq!(rx2.recv().unwrap().method, "test");
+    }
+}
+
+// ==========================================================================
+// Browser Use unit tests (no CEF runtime needed)
+// ==========================================================================
+
+#[cfg(test)]
+mod browser_use_tests {
+    use crate::browser_use::*;
+
+    #[test]
+    fn key_windows_key_codes() {
+        assert_eq!(Key::Enter.windows_key_code(), 0x0D);
+        assert_eq!(Key::Tab.windows_key_code(), 0x09);
+        assert_eq!(Key::Escape.windows_key_code(), 0x1B);
+        assert_eq!(Key::Backspace.windows_key_code(), 0x08);
+        assert_eq!(Key::Space.windows_key_code(), 0x20);
+        assert_eq!(Key::ArrowUp.windows_key_code(), 0x26);
+        assert_eq!(Key::ArrowDown.windows_key_code(), 0x28);
+        assert_eq!(Key::ArrowLeft.windows_key_code(), 0x25);
+        assert_eq!(Key::ArrowRight.windows_key_code(), 0x27);
+        assert_eq!(Key::Delete.windows_key_code(), 0x2E);
+        assert_eq!(Key::Home.windows_key_code(), 0x24);
+        assert_eq!(Key::End.windows_key_code(), 0x23);
+        assert_eq!(Key::PageUp.windows_key_code(), 0x21);
+        assert_eq!(Key::PageDown.windows_key_code(), 0x22);
+        // ASCII letters → uppercase VK
+        assert_eq!(Key::Char('a').windows_key_code(), 'A' as i32);
+        assert_eq!(Key::Char('Z').windows_key_code(), 'Z' as i32);
+        // Digits
+        assert_eq!(Key::Char('0').windows_key_code(), '0' as i32);
+    }
+
+    #[test]
+    fn key_char_values() {
+        assert_eq!(Key::Enter.char_value(), '\r' as u16);
+        assert_eq!(Key::Tab.char_value(), '\t' as u16);
+        assert_eq!(Key::Space.char_value(), ' ' as u16);
+        assert_eq!(Key::Backspace.char_value(), 0x08);
+        assert_eq!(Key::Char('x').char_value(), 'x' as u16);
+        // Non-printable keys have char_value 0
+        assert_eq!(Key::ArrowUp.char_value(), 0);
+        assert_eq!(Key::Delete.char_value(), 0);
+        assert_eq!(Key::Escape.char_value(), 0);
+    }
+
+    #[test]
+    fn modifiers_to_cef_flags() {
+        let none = Modifiers::default();
+        assert_eq!(none.to_cef_flags(), 0);
+
+        let shift = Modifiers { shift: true, ..Default::default() };
+        assert_eq!(shift.to_cef_flags(), 2); // EVENTFLAG_SHIFT_DOWN
+
+        let ctrl = Modifiers { ctrl: true, ..Default::default() };
+        assert_eq!(ctrl.to_cef_flags(), 4); // EVENTFLAG_CONTROL_DOWN
+
+        let alt = Modifiers { alt: true, ..Default::default() };
+        assert_eq!(alt.to_cef_flags(), 8); // EVENTFLAG_ALT_DOWN
+
+        let meta = Modifiers { meta: true, ..Default::default() };
+        assert_eq!(meta.to_cef_flags(), 128); // EVENTFLAG_COMMAND_DOWN
+
+        // Combined
+        let ctrl_shift = Modifiers { ctrl: true, shift: true, ..Default::default() };
+        assert_eq!(ctrl_shift.to_cef_flags(), 6); // 4 + 2
+    }
+
+    #[test]
+    fn screenshot_options_default() {
+        let opts = ScreenshotOptions::default();
+        assert!(opts.format.is_none());
+        assert!(opts.quality.is_none());
+        assert!(opts.clip.is_none());
+    }
+
+    #[test]
+    fn element_bounds_fields() {
+        let bounds = ElementBounds {
+            x: 10.0, y: 20.0, width: 100.0, height: 50.0,
+        };
+        assert_eq!(bounds.x, 10.0);
+        assert_eq!(bounds.y, 20.0);
+        assert_eq!(bounds.width, 100.0);
+        assert_eq!(bounds.height, 50.0);
+    }
+
+    #[test]
+    fn browser_cookie_clone() {
+        let cookie = BrowserCookie {
+            name: "session".into(),
+            value: "abc123".into(),
+            domain: ".example.com".into(),
+            path: "/".into(),
+            secure: true,
+            http_only: true,
+        };
+        let cloned = cookie.clone();
+        assert_eq!(cloned.name, "session");
+        assert_eq!(cloned.domain, ".example.com");
+        assert!(cloned.secure);
+    }
+
+    #[test]
+    fn frame_info_fields() {
+        let frame = FrameInfo {
+            id: "main".into(),
+            url: "https://example.com".into(),
+            name: "".into(),
+            is_main: true,
+        };
+        assert!(frame.is_main);
+        assert_eq!(frame.id, "main");
+    }
+}

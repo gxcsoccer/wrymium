@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Accessibility Test</title></head>
+<body>
+  <header>
+    <nav aria-label="Main navigation">
+      <a href="#home">Home</a>
+      <a href="#about">About</a>
+      <a href="#contact">Contact</a>
+    </nav>
+  </header>
+  <main>
+    <h1>Accessibility Test Page</h1>
+    <section aria-label="Search">
+      <input type="search" aria-label="Search query" placeholder="Search...">
+      <button aria-label="Submit search">Search</button>
+    </section>
+    <article>
+      <h2>Article Title</h2>
+      <p>Article content goes here.</p>
+      <button role="button" aria-pressed="false">Toggle</button>
+    </article>
+  </main>
+  <aside aria-label="Sidebar">
+    <h2>Related Links</h2>
+    <ul role="list">
+      <li role="listitem"><a href="#link1">Link 1</a></li>
+      <li role="listitem"><a href="#link2">Link 2</a></li>
+    </ul>
+  </aside>
+  <footer>
+    <p>Footer content</p>
+  </footer>
+</body>
+</html>

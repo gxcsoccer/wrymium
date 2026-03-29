@@ -190,6 +190,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cdp-test"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "serde_json",
+ "tao",
+ "wry",
+]
+
+[[package]]
 name = "cef"
 version = "146.0.0+146.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2949,6 +2959,7 @@ dependencies = [
  "objc2-foundation",
  "once_cell",
  "raw-window-handle",
+ "serde_json",
  "url",
  "windows 0.62.2",
 ]

@@ -91,6 +91,7 @@ optional = true
 version = "2"
 
 [dependencies.wry]
+path = "../wrymium"
 version = "0.54.0"
 features = [
     "drag-drop",

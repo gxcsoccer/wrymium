@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Network Test</title></head>
+<body>
+  <h1>Network Idle Test</h1>
+  <div id="status">Loading...</div>
+  <script>
+    let completed = 0;
+    const delays = [500, 1000, 1500];
+    delays.forEach((ms, i) => {
+      setTimeout(() => {
+        // Simulate XHR by using fetch with a data URI (no actual network)
+        fetch(`data:text/plain,response_${i}`).then(() => {
+          completed++;
+          document.getElementById('status').textContent = `${completed}/${delays.length} loaded`;
+          if (completed === delays.length) {
+            window.__allLoaded = true;
+          }
+        });
+      }, ms);
+    });
+  </script>
+</body>
+</html>

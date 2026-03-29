@@ -5,6 +5,8 @@
 
 #[macro_use]
 mod log;
+pub mod browser_use;
+pub mod cdp;
 mod cef_init;
 mod context;
 mod error;

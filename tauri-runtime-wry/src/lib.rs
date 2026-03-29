@@ -1461,6 +1461,13 @@ pub enum WebviewMessage {
   CloseDevTools,
   #[cfg(any(debug_assertions, feature = "devtools"))]
   IsDevToolsOpen(Sender<bool>),
+  // CDP (Chrome DevTools Protocol) — uses raw JSON strings to avoid serde_json dependency
+  CdpSend {
+    method: String,
+    params_json: String,
+    tx: Sender<std::result::Result<String, String>>,
+  },
+  CdpSubscribe(Sender<Option<std::sync::mpsc::Receiver<wry::cdp::CdpEvent>>>),
 }
 
 pub enum EventLoopWindowTargetMessage {
@@ -3902,6 +3909,25 @@ fn handle_user_message<T: UserEvent>(
           #[cfg(any(debug_assertions, feature = "devtools"))]
           WebviewMessage::IsDevToolsOpen(tx) => {
             tx.send(webview.is_devtools_open()).unwrap();
+          }
+          // CDP: dispatch a CDP method call on the event loop thread (where CEF UI thread lives).
+          // params_json is a raw JSON string; response is also returned as raw JSON string.
+          WebviewMessage::CdpSend { method, params_json, tx } => {
+            let result = (|| -> std::result::Result<String, String> {
+              let params: wry::cdp::serde_json::Value =
+                wry::cdp::serde_json::from_str(&params_json)
+                  .map_err(|e| format!("invalid params JSON: {e}"))?;
+              let value = webview
+                .cdp_send_blocking(&method, params, std::time::Duration::from_secs(30))
+                .map_err(|e| e.to_string())?;
+              wry::cdp::serde_json::to_string(&value)
+                .map_err(|e| format!("failed to serialize result: {e}"))
+            })();
+            let _ = tx.send(result);
+          }
+          // CDP: subscribe to CDP events.
+          WebviewMessage::CdpSubscribe(tx) => {
+            let _ = tx.send(webview.cdp_subscribe());
           }
         }
       }

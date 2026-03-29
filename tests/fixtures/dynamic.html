@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Dynamic DOM Test</title></head>
+<body>
+  <h1>Dynamic Content</h1>
+  <ul id="list"></ul>
+  <script>
+    let count = 0;
+    const max = 10;
+    const interval = setInterval(() => {
+      const li = document.createElement('li');
+      li.className = 'item';
+      li.textContent = `Item ${++count}`;
+      document.getElementById('list').appendChild(li);
+      if (count >= max) {
+        clearInterval(interval);
+        window.__dynamicDone = true;
+      }
+    }, 200);
+  </script>
+</body>
+</html>

@@ -375,7 +375,8 @@ pub struct WebView {
     url: String,
     #[allow(dead_code)]
     visible: bool,
-    browser: SharedBrowser,
+    pub(crate) browser: SharedBrowser,
+    pub(crate) cdp_bridge: crate::cdp::SharedCdpBridge,
 }
 
 impl WebView {
@@ -435,9 +436,18 @@ impl WebView {
         let shared_browser: SharedBrowser =
             std::sync::Arc::new(std::sync::Mutex::new(None));
 
+        // Create shared CDP bridge handle (populated in on_after_created)
+        let shared_cdp_bridge: crate::cdp::SharedCdpBridge =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+
         // Create CefClient with handlers
         let webview_id_for_client = id.clone();
-        let mut client = WrymiumClient::new(None, shared_browser.clone(), webview_id_for_client);
+        let mut client = WrymiumClient::new(
+            None,
+            shared_browser.clone(),
+            shared_cdp_bridge.clone(),
+            webview_id_for_client,
+        );
 
         // Browser settings
         let browser_settings = BrowserSettings::default();
@@ -494,6 +504,7 @@ impl WebView {
             url,
             visible,
             browser: shared_browser,
+            cdp_bridge: shared_cdp_bridge,
         })
     }
 
@@ -669,6 +680,82 @@ impl WebView {
         false
     }
 
+    // --- CDP (Chrome DevTools Protocol) ---
+
+    /// Dispatch a CDP method call. **Must be called on the CEF UI thread.**
+    ///
+    /// Returns `(message_id, Receiver)` for the response. The Receiver can be
+    /// awaited/blocked from any thread.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let (id, rx) = webview.cdp_dispatch("Runtime.evaluate",
+    ///     serde_json::json!({"expression": "1+1"}))?;
+    /// let result = rx.recv_timeout(Duration::from_secs(5))??;
+    /// ```
+    pub fn cdp_dispatch(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> crate::cdp::CdpResult<(
+        i32,
+        std::sync::mpsc::Receiver<crate::cdp::CdpResult<serde_json::Value>>,
+    )> {
+        let guard_browser = self.browser.lock().unwrap();
+        let browser = guard_browser.as_ref().ok_or(crate::cdp::CdpError::NotReady)?;
+        let host = ImplBrowser::host(browser).ok_or(crate::cdp::CdpError::NotReady)?;
+
+        let guard_bridge = self.cdp_bridge.lock().unwrap();
+        let bridge = guard_bridge.as_ref().ok_or(crate::cdp::CdpError::NotReady)?;
+
+        bridge.dispatch(&host, method, params)
+    }
+
+    /// Send a CDP method call and spin-wait until the response arrives.
+    /// **Must be called on the CEF UI thread.**
+    ///
+    /// Pumps the CEF message loop between checks so observer callbacks can fire.
+    /// Releases browser/bridge locks before spinning to prevent deadlock with
+    /// CEF callbacks (e.g. `on_before_close`) that also lock these mutexes.
+    pub fn cdp_send_blocking(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> crate::cdp::CdpResult<serde_json::Value> {
+        // Phase 1: dispatch (locks held briefly, then released)
+        let (_id, rx) = self.cdp_dispatch(method, params)?;
+
+        // Phase 2: spin-wait with message pump (no locks held)
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match rx.try_recv() {
+                Ok(result) => return result,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return Err(crate::cdp::CdpError::ChannelClosed);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    if std::time::Instant::now() > deadline {
+                        // Note: the pending entry in CdpBridgeInner will remain
+                        // until the observer eventually tries to send (and fails
+                        // because rx is dropped), or until agent detach drains it.
+                        return Err(crate::cdp::CdpError::Timeout);
+                    }
+                    // Pump CEF message loop so observer callbacks can fire.
+                    cef::do_message_loop_work();
+                    std::thread::yield_now();
+                }
+            }
+        }
+    }
+
+    /// Subscribe to CDP events. Returns a Receiver that yields CdpEvent values.
+    /// The subscription is active until the Receiver is dropped.
+    pub fn cdp_subscribe(&self) -> Option<std::sync::mpsc::Receiver<crate::cdp::CdpEvent>> {
+        let guard = self.cdp_bridge.lock().unwrap();
+        guard.as_ref().map(|bridge| bridge.subscribe())
+    }
+
     // --- Static methods ---
 
     pub fn fetch_data_store_identifiers(
@@ -729,12 +816,17 @@ wrap_client! {
     pub struct WrymiumClient {
         ipc_handler: Option<std::sync::Arc<dyn Fn(http::Request<String>) + Send + Sync>>,
         shared_browser: SharedBrowser,
+        shared_cdp_bridge: crate::cdp::SharedCdpBridge,
         webview_id: String,
     }
 
     impl Client {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(WrymiumLifeSpanHandler::new(self.shared_browser.clone(), self.webview_id.clone()))
+            Some(WrymiumLifeSpanHandler::new(
+                self.shared_browser.clone(),
+                self.shared_cdp_bridge.clone(),
+                self.webview_id.clone(),
+            ))
         }
 
         fn display_handler(&self) -> Option<DisplayHandler> {
@@ -793,6 +885,7 @@ wrap_client! {
 wrap_life_span_handler! {
     struct WrymiumLifeSpanHandler {
         shared_browser: SharedBrowser,
+        shared_cdp_bridge: crate::cdp::SharedCdpBridge,
         webview_id: String,
     }
 
@@ -806,6 +899,15 @@ wrap_life_span_handler! {
                 // Store the browser reference so WebView methods can use it
                 let mut guard = self.shared_browser.lock().unwrap();
                 *guard = Some(browser.clone());
+
+                // Initialize CDP Bridge: register DevTools observer and enable core domains
+                if let Some(host) = ImplBrowser::host(browser) {
+                    if let Some(bridge) = crate::cdp::CdpBridge::new(&host) {
+                        bridge.enable_core_domains(&host);
+                        *self.shared_cdp_bridge.lock().unwrap() = Some(bridge);
+                        wrymium_log!("[wrymium] CDP Bridge initialized for browser_id={browser_id}");
+                    }
+                }
             }
         }
 

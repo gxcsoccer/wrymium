@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Form Test</title></head>
+<body>
+  <h1>Form Test Page</h1>
+  <form id="test-form" onsubmit="window.__submitted = true; return false;">
+    <input id="name" type="text" placeholder="Name">
+    <input id="email" type="email" placeholder="Email">
+    <input id="password" type="password" placeholder="Password">
+    <textarea id="bio" placeholder="Bio"></textarea>
+    <select id="country">
+      <option value="">Select...</option>
+      <option value="us">United States</option>
+      <option value="cn">China</option>
+      <option value="jp">Japan</option>
+    </select>
+    <input id="agree" type="checkbox">
+    <div id="editor" contenteditable="true" style="border:1px solid #ccc;min-height:50px;padding:4px;">Edit me</div>
+    <button id="submit-btn" type="submit">Submit</button>
+  </form>
+</body>
+</html>
