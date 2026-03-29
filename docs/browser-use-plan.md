@@ -954,10 +954,12 @@ Comparison (vs Playwright MCP):
 
 | Phase | 文件 | 行数 | 编译 | 测试 |
 |-------|------|------|------|------|
-| 1. CDP Bridge | `wrymium/src/cdp.rs` | 343 | ✅ | 9/9 通过 |
-| 2. Browser Use | `wrymium/src/browser_use.rs` | 930 | ✅ | 8/8 通过 |
+| 1. CDP Bridge | `wrymium/src/cdp.rs` | 355 | ✅ | 9 CDP + 7 可靠性 |
+| 2. Browser Use | `wrymium/src/browser_use.rs` | 1200+ | ✅ | 19 集成测试 |
 | 3. Tauri Commands | `tauri-runtime-wry/src/lib.rs` | +26 | ✅ | — |
 | 4. Agent Loop | `examples/browser-use-agent/src/` | 718 | — (TS) | — |
+| 测试 | `examples/cdp-test/`, `wrymium/src/tests.rs` | 1100+ | ✅ | 92 项全通过 |
+| 性能基准 | `examples/bench/`, `benchmarks/` | 500+ | ✅ | 16 项 micro + Playwright 对比 |
 
 ### 设计方案 vs 实际实现的差异
 
@@ -970,29 +972,33 @@ Comparison (vs Playwright MCP):
 | `cdp_send` 单一 async 方法 | `cdp_dispatch` (同步) + `cdp_send_blocking` (spin-wait) | 拆分同步 dispatch（UI 线程）和 await（任意线程） |
 | `with_html(TEST_HTML)` 测试 | `file://` URL 加载 fixture | data: URI 会 percent-encode `<script>` 导致 JS 不执行 |
 
-### 实测结果（82 项测试，全部通过）
+### 实测结果（92 项测试，全部通过）
 
 **57 项单元测试** (`cargo test -p wry`): CDP error/event/pending/broadcast、Key codes、modifier flags、类型构造
 
-**25 项集成测试** (`cdp-test`, 需 CEF runtime):
+**35 项集成测试** (`cdp-test`, 需 CEF runtime):
 ```
-CDP Bridge:                                    Browser Use:
-  ✅ evaluate(1+1) == 2                          ✅ screenshot() → valid PNG bytes
+CDP Bridge (9):                                Browser Use 基础 (11):
+  ✅ evaluate(1+1) == 2                          ✅ screenshot() → PNG bytes
   ✅ evaluate('hello') == "hello"                 ✅ screenshot(clip) → smaller PNG
   ✅ window.__ready === true                      ✅ find_element("#test-btn") → bounds
   ✅ DOM.querySelector("#title")                  ✅ find_elements("button") → elements
   ✅ Page.captureScreenshot (PNG)                 ✅ click_element("#test-btn") → handler
-  ✅ event subscription (Page events)             ✅ click_element on scrolled page → coords ok
-  ✅ invalid method → MethodFailed                ✅ type_text("Hello 你好") → Unicode
-  ✅ 3 concurrent dispatches                      ✅ press_key(Enter) → form submit
-  ✅ browser_use::evaluate                        ✅ navigate(url) → page loaded
-                                                  ✅ list_frames() → main frame
-                                                  ✅ accessibility_tree() → nodes
-                                                  ✅ wait_for_selector → dynamic element
-                                                  ✅ wait_for_dom_stable → 10 items
-                                                  ✅ cookie set → get → clear
-                                                  ✅ annotate_screenshot → labeled PNG
-                                                  ✅ scroll (JS fallback)
+  ✅ event subscription (Page events)             ✅ type_text("Hello 你好") → Unicode
+  ✅ invalid method → MethodFailed                ✅ accessibility_tree() → nodes
+  ✅ 3 concurrent dispatches                      ✅ accessibility_tree_compact() → text
+  ✅ browser_use::evaluate                        ✅ accessibility_tree_fast() → JS text
+                                                  ✅ interactive_elements() → 3 elements
+Browser Use 扩展 (8):                            ✅ navigate(url) → page loaded
+  ✅ list_frames() → main frame
+  ✅ press_key(Enter) → form submit             可靠性 (7):
+  ✅ scroll (JS fallback)                         ✅ 1000 次调用无 pending 泄漏
+  ✅ click_element scrolled page → coords ok      ✅ 100 次 dispatch+recv 无泄漏
+  ✅ wait_for_selector → dynamic element          ✅ 丢弃 receiver 后 pending 清理
+  ✅ wait_for_dom_stable → 10 items               ✅ subscriber drop 后清理
+  ✅ cookie set → get → clear                     ✅ timeout 正确返回不 hang
+  ✅ annotate_screenshot → labeled PNG            ✅ 100 并发 stress → 全部响应
+                                                  ✅ 跨导航 evaluate 稳定
 ```
 
 ### 性能基准（实测数据）
@@ -1076,6 +1082,16 @@ Navigate (file://)            14.7ms         1.93ms            0.13x      🔵 P
 ### 已知问题与限制
 
 1. **`with_html()` (data: URI) 不执行 `<script>`**: wrymium 的 `form_urlencoded::byte_serialize` 编码破坏了 JS 中的特殊字符。建议用 `with_url("file://...")` 或自定义 protocol 代替。
-2. **Windows `multi_threaded_message_loop` 未验证**: `send_blocking` 的 `do_message_loop_work()` 泵在 Windows 上的行为需要单独验证。
-3. **iframe 支持**: Phase 2 API 预留了 `frame_id` 参数（设计方案），但当前实现未包含，所有操作针对 main frame。
-4. **CefDownloadHandler**: builder API 已存在但 CEF 回调未接入（设计方案已标注）。
+2. **`send_mouse_wheel_event` 在 windowed 模式下无效**: CEF windowed 模式需要窗口 focus 才能接收滚动事件。Workaround: 用 JS `window.scrollTo()` 或 `element.scrollIntoView()` 代替。
+3. **`wait_for_navigation` 存在竞态**: 如果 `Page.loadEventFired` 在订阅之前触发，会 miss 事件导致超时。Workaround: 用 `navigate(url, false)` + 轮询 `document.readyState` 或 `document.title`。
+4. **Windows `multi_threaded_message_loop` 未验证**: `send_blocking` 的 `do_message_loop_work()` 泵在 Windows 上的行为需要单独验证。
+5. **iframe 支持**: 设计方案预留了 `frame_id` 参数，当前实现未包含，所有操作针对 main frame。
+6. **CefDownloadHandler**: builder API 已存在但 CEF 回调未接入。
+
+### 未来扩展
+
+- **端到端 Agent 评估**: 需要 Claude API key + 完整 Tauri app 集成，评估任务成功率/步数/token 消耗
+- **iframe 支持**: `find_element` / `evaluate` 支持 `frame_id` 参数
+- **CefDownloadHandler 接入**: 绑定 CEF 下载回调到 builder API
+- **`send_mouse_wheel_event` 修复**: 调查 windowed 模式下 focus/event 传递问题
+- **OSR 截图模式**: 切换到 offscreen rendering 可能改善截图延迟（当前 50ms PNG）
