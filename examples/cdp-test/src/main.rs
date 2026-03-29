@@ -480,6 +480,71 @@ fn run_cdp_tests(webview: &wry::WebView) -> i32 {
         Ok(())
     });
 
+    // -----------------------------------------------------------------------
+    // Test 18: accessibility_tree_compact
+    // -----------------------------------------------------------------------
+    test!("accessibility_tree_compact() returns indented text", {
+        // Make sure we're on basic.html
+        webview.navigate(&basic_fixture_url, false).map_err(|e| e.to_string())?;
+        std::thread::sleep(Duration::from_secs(1));
+
+        let compact = webview.accessibility_tree_compact().map_err(|e| e.to_string())?;
+        if compact.is_empty() {
+            return Err("empty compact tree".into());
+        }
+        // Should contain role markers like [document], [heading], [button], [link]
+        if !compact.contains("[") || !compact.contains("]") {
+            return Err(format!("no role markers found in: {}", &compact[..200.min(compact.len())]));
+        }
+        // Should contain our page elements
+        let has_heading = compact.contains("Basic Test") || compact.contains("heading");
+        let has_button = compact.contains("button") || compact.contains("Click Me");
+        if !has_heading || !has_button {
+            return Err(format!("missing expected elements. heading={has_heading} button={has_button}\n{compact}"));
+        }
+        // Compare token sizes (rough: 1 token ≈ 4 chars)
+        let raw = webview.accessibility_tree().map_err(|e| e.to_string())?;
+        let raw_size = serde_json::to_string(&raw).unwrap_or_default().len();
+        let compact_size = compact.len();
+        let ratio = raw_size as f64 / compact_size as f64;
+        eprintln!("    [info] raw={raw_size} chars, compact={compact_size} chars, ratio={ratio:.1}x");
+        if ratio < 2.0 {
+            return Err(format!("compact not much smaller than raw: {ratio:.1}x"));
+        }
+        Ok(())
+    });
+
+    // -----------------------------------------------------------------------
+    // Test 19: interactive_elements
+    // -----------------------------------------------------------------------
+    test!("interactive_elements() finds button + input + link", {
+        let elements = webview.interactive_elements().map_err(|e| e.to_string())?;
+        if elements.is_empty() {
+            return Err("no interactive elements".into());
+        }
+        let roles: Vec<&str> = elements.iter().map(|e| e.role.as_str()).collect();
+        let has_button = roles.contains(&"button");
+        let has_link = roles.contains(&"link");
+        let has_textbox = roles.contains(&"textbox");
+        if !has_button {
+            return Err(format!("no button. roles: {roles:?}"));
+        }
+        if !has_link {
+            return Err(format!("no link. roles: {roles:?}"));
+        }
+        if !has_textbox {
+            return Err(format!("no textbox. roles: {roles:?}"));
+        }
+        // Each element should have a selector
+        for el in &elements {
+            if el.selector.is_empty() {
+                return Err(format!("element {:?} has no selector", el.role));
+            }
+        }
+        eprintln!("    [info] found {} interactive elements: {:?}", elements.len(), roles);
+        Ok(())
+    });
+
     // ===================================================================
     // Browser Use — Extended Tests
     // ===================================================================
