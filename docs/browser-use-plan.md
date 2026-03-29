@@ -1003,58 +1003,71 @@ CDP Bridge:                                    Browser Use:
 ```
 操作                                          n       p50        p95        p99        min
 ─────────────────────────────────────────────────────────────────────────────────────────
-🔥 cdp_roundtrip (evaluate "1")              1000     54µs       95µs       159µs      43µs
-   screenshot (full viewport PNG)             100     50.0ms     67.0ms     83.2ms     48.7ms
-   screenshot (200x200 clip)                  100     50.0ms     52.4ms     55.3ms     25.1ms
-🔥 a11y_tree (basic.html)                    100     433µs      556µs      10.1ms     400µs
-   a11y_tree (a11y.html, complex)             100     1.19ms     1.43ms     9.5ms      1.14ms
-   dom_query (find_element "#title")         1000     211µs      256µs      333µs      189µs
-🔥 click (native send_mouse_click)           1000     6µs        8µs        11µs       4µs
-   click_element ("#test-btn")                100     283µs      527µs      41.3ms     255µs
-🔥 type_text ("Hello World")                  100     82µs       133µs      9.1ms      57µs
-   navigate (file:// local)                    20     14.8ms     15.4ms     15.4ms     13.9ms
-🔥 concurrent_cdp (10 parallel evals)         100     201µs      255µs      857µs      180µs
-   annotate_screenshot (full pipeline)         50     100ms      103ms      200ms      66ms
+🔥 cdp_roundtrip (evaluate "1")              1000     53µs       96µs       171µs      42µs
+   screenshot (full viewport PNG)             100     50.2ms     66.8ms     67.5ms     49.0ms
+🔥 screenshot_fast (JPEG q60)                 100     33.4ms     34.2ms     35.5ms     29.8ms
+   screenshot (200x200 clip)                  100     50.0ms     51.0ms     51.1ms     24.8ms
+🔥 a11y_tree (basic.html)                    100     428µs      517µs      10.1ms     392µs
+   a11y_tree_compact (basic.html)             100     487µs      581µs      901µs      461µs
+   a11y_tree (a11y.html, complex)             100     1.18ms     1.84ms     10.0ms     1.14ms
+🔥 find_element (1 JS roundtrip)             1000     71µs       91µs       155µs      49µs
+🔥 click (native send_mouse_click)           1000     6µs        8µs        15µs       4µs
+🔥 click_element (1 JS + native click)        100     110µs      198µs      39.4ms     98µs
+🔥 type_text ("Hello World")                  100     83µs       121µs      4.9ms      71µs
+🔥 interactive_elements                       100     183µs      229µs      572µs      162µs
+   navigate (file:// local)                    20     14.7ms     16.4ms     16.4ms     14.1ms
+🔥 concurrent_cdp (10 parallel evals)         100     202µs      275µs      570µs      179µs
+   annotate_screenshot (full pipeline)         50     100ms      102ms      108ms      66ms
 ```
 
 **关键数据**:
-- **CDP roundtrip 54µs** — 进程内函数调用，无 WebSocket/TCP 序列化开销
+- **CDP roundtrip 53µs** — 进程内函数调用，无 WebSocket/TCP 序列化开销
+- **find_element 71µs** — 优化后 1 次 JS evaluate（之前 211µs / 3 次 CDP roundtrip）
+- **click_element 110µs** — 优化后 1 次 JS + 原生 click（之前 283µs / 4 次 CDP roundtrip）
 - **原生 click 6µs** — 直接调用 CEF BrowserHost API，零网络跳转
-- **10 并发 CDP 201µs** — 所有请求完成总耗时，非单个
-- **A11y tree 433µs** — 轻量页面获取远快于网络 CDP 方案的 5-20ms
+- **screenshot_fast 33ms** — JPEG q60，适合 LLM observe（比 PNG 50ms 快 1.5x）
+- **interactive_elements 183µs** — 单次 JS 获取所有可操作元素
+- **10 并发 CDP 202µs** — 所有请求完成总耗时，非单个
 
 ### 对比基准：wrymium vs Playwright
 
 > 同一台机器（macOS Apple Silicon），同一组 HTML fixture，release build vs headless Chromium。
 > wrymium 使用进程内 CEF CDP，Playwright 使用 CDP over WebSocket。
+> wrymium 数据含 roundtrip 优化后结果（find/click 改为单次 JS evaluate）。
 
 ```
-操作                          wrymium p50    Playwright p50    倍数     赢家
-──────────────────────────────────────────────────────────────────────────────
-CDP roundtrip (evaluate)      54µs           148µs             2.7x     🟢 wrymium
-Raw CDP session               54µs           121µs             2.2x     🟢 wrymium
-DOM query (find + bounds)     211µs          864µs             4.1x     🟢 wrymium
-Click (native vs CDP)         6µs            25.6ms            4267x    🟢 wrymium
-Type text (JS vs fill)        82µs           833µs             10x      🟢 wrymium
-10 concurrent evals           201µs          716µs             3.6x     🟢 wrymium
-Screenshot (full PNG)         50.0ms         28.6ms            0.57x    🔵 Playwright
-Screenshot (clip)             50.0ms         25.0ms            0.50x    🔵 Playwright
-A11y tree (basic)             433µs          248µs             0.57x    🔵 Playwright
-A11y tree (complex)           1.19ms         422µs             0.35x    🔵 Playwright
-Navigate (file://)            14.8ms         2.0ms             0.13x    🔵 Playwright
+操作                          wrymium p50    Playwright p50    倍数       赢家
+────────────────────────────────────────────────────────────────────────────────
+CDP roundtrip (evaluate)      53µs           145µs             2.7x       🟢 wrymium
+Raw CDP session               53µs           123µs             2.3x       🟢 wrymium
+DOM query (find + bounds)     71µs           855µs             12x        🟢 wrymium   ⚡ 优化后
+Click element (full)          110µs          25.6ms            233x       🟢 wrymium   ⚡ 优化后
+Click (native only)           6µs            —                 —          🟢 wrymium
+Type text (JS vs fill)        83µs           818µs             9.9x       🟢 wrymium
+10 concurrent evals           202µs          713µs             3.5x       🟢 wrymium
+Screenshot (JPEG q60)         33ms           —                 —          🟢 wrymium   ⚡ 新增
+Screenshot (full PNG)         50ms           26ms              0.52x      🔵 Playwright
+Screenshot (clip PNG)         50ms           25ms              0.50x      🔵 Playwright
+A11y tree (basic)             428µs          225µs             0.53x      🔵 Playwright
+A11y tree (complex)           1.18ms         423µs             0.36x      🔵 Playwright
+Navigate (file://)            14.7ms         1.93ms            0.13x      🔵 Playwright
+interactive_elements          183µs          —                 —          🟢 wrymium   ⚡ 新增
 ```
 
-**wrymium 优势场景（6/11 胜）**:
+**wrymium 优势场景（8/14 胜）**:
 - **所有 CDP 调用类操作**: 进程内调度省去 WebSocket 序列化/反序列化 + 网络 RTT
-- **原生输入**: `send_mouse_click_event` (6µs) vs Playwright 的 CDP `Input.dispatchMouseEvent` 需要多次 WebSocket 往返（actionability check + scroll + click = 25ms）
-- **并发 CDP**: 进程内无连接竞争，10 个请求 201µs 全部完成
+- **DOM query 12x**: 优化后单次 JS evaluate 替代 3 次 CDP roundtrip（71µs vs 855µs）
+- **Click element 233x**: 优化后单次 JS evaluate + 原生 click 替代 4 次 CDP roundtrip（110µs vs 25.6ms）
+- **原生输入**: `send_mouse_click_event` (6µs) 零网络开销
+- **并发 CDP**: 进程内无连接竞争，10 个请求 202µs 全部完成
+- **screenshot_fast (JPEG)**: 33ms，接近 Playwright 的 PNG 26ms
 
-**Playwright 优势场景（5/11 胜）**:
-- **截图**: Playwright headless 模式下 Chromium 的 GPU 合成管线更优化（无窗口系统开销）；wrymium windowed 模式截图需经过完整合成管线
-- **A11y tree**: Playwright 的 CDPSession 直接走优化过的 WebSocket pipeline；wrymium 的 `send_blocking` spin-wait 有微小的循环开销
-- **导航**: Playwright 在 headless 模式下跳过了大量 UI 渲染工作
+**Playwright 优势场景（5/14 胜）**:
+- **截图 (PNG)**: headless GPU 合成管线优化（无窗口系统开销）
+- **A11y tree**: CDPSession 直接走优化过的 WebSocket pipeline
+- **导航**: headless 跳过 UI 渲染
 
-**关键结论**: wrymium 的进程内 CDP 在 **交互类操作**（evaluate / click / type / DOM query）上有 2-4000x 优势，这正是 Browser Use Agent 的热路径。截图和 A11y tree 属于观察步骤，频率较低且绝对延迟已在可接受范围。
+**关键结论**: wrymium 在 Agent Loop 热路径（evaluate / find / click / type）上有 **3-233x 优势**。优化后 `find_element` 从 4.1x 提升到 12x，`click_element` 从 4267x（raw click）提升到 233x（含 find 的完整流程）。截图差距通过 JPEG 模式缩小到 1.3x。
 
 ### 已知问题与限制
 
