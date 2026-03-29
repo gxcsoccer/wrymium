@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Iframe Test</title></head>
+<body>
+  <h1 id="main-title">Main Page</h1>
+  <button id="main-btn" onclick="window.__mainClicked = true">Main Button</button>
+
+  <iframe id="child-frame" srcdoc='
+    <!DOCTYPE html>
+    <html>
+    <head><title>Child Frame</title></head>
+    <body>
+      <h2 id="child-title">Child Frame Content</h2>
+      <button id="child-btn" onclick="window.__childClicked = true">Child Button</button>
+      <input id="child-input" type="text" value="">
+      <script>window.__childReady = true;</script>
+    </body>
+    </html>
+  ' style="width:400px;height:200px;border:1px solid #ccc;"></iframe>
+
+  <script>window.__mainReady = true;</script>
+</body>
+</html>

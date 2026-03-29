@@ -440,12 +440,22 @@ impl WebView {
         let shared_cdp_bridge: crate::cdp::SharedCdpBridge =
             std::sync::Arc::new(std::sync::Mutex::new(None));
 
+        // Wrap download handlers in Arc for sharing with CEF handler.
+        // The builder handlers are 'static but not necessarily Send+Sync,
+        // so we wrap in Mutex to satisfy the CEF Clone requirement.
+        let download_started: Option<std::sync::Arc<std::sync::Mutex<Box<dyn Fn(String, &mut std::path::PathBuf) -> bool + 'static>>>> =
+            builder.download_started_handler.map(|h| std::sync::Arc::new(std::sync::Mutex::new(h)));
+        let download_completed: Option<std::sync::Arc<std::sync::Mutex<Box<dyn Fn(String, Option<std::path::PathBuf>, bool) + 'static>>>> =
+            builder.download_completed_handler.map(|h| std::sync::Arc::new(std::sync::Mutex::new(h)));
+
         // Create CefClient with handlers
         let webview_id_for_client = id.clone();
         let mut client = WrymiumClient::new(
             None,
             shared_browser.clone(),
             shared_cdp_bridge.clone(),
+            download_started,
+            download_completed,
             webview_id_for_client,
         );
 
@@ -833,6 +843,8 @@ wrap_client! {
         ipc_handler: Option<std::sync::Arc<dyn Fn(http::Request<String>) + Send + Sync>>,
         shared_browser: SharedBrowser,
         shared_cdp_bridge: crate::cdp::SharedCdpBridge,
+        download_started_handler: Option<std::sync::Arc<std::sync::Mutex<Box<dyn Fn(String, &mut std::path::PathBuf) -> bool + 'static>>>>,
+        download_completed_handler: Option<std::sync::Arc<std::sync::Mutex<Box<dyn Fn(String, Option<std::path::PathBuf>, bool) + 'static>>>>,
         webview_id: String,
     }
 
@@ -847,6 +859,13 @@ wrap_client! {
 
         fn display_handler(&self) -> Option<DisplayHandler> {
             Some(WrymiumDisplayHandler::new())
+        }
+
+        fn download_handler(&self) -> Option<DownloadHandler> {
+            Some(WrymiumDownloadHandler::new(
+                self.download_started_handler.clone(),
+                self.download_completed_handler.clone(),
+            ))
         }
 
         fn on_process_message_received(
@@ -952,5 +971,89 @@ wrap_display_handler! {
     struct WrymiumDisplayHandler;
 
     impl DisplayHandler {
+    }
+}
+
+wrap_download_handler! {
+    struct WrymiumDownloadHandler {
+        started_handler: Option<std::sync::Arc<std::sync::Mutex<Box<dyn Fn(String, &mut std::path::PathBuf) -> bool + 'static>>>>,
+        completed_handler: Option<std::sync::Arc<std::sync::Mutex<Box<dyn Fn(String, Option<std::path::PathBuf>, bool) + 'static>>>>,
+    }
+
+    impl DownloadHandler {
+        fn can_download(
+            &self,
+            _browser: Option<&mut Browser>,
+            _url: Option<&CefString>,
+            _request_method: Option<&CefString>,
+        ) -> ::std::os::raw::c_int {
+            1 // allow all downloads
+        }
+
+        fn on_before_download(
+            &self,
+            _browser: Option<&mut Browser>,
+            download_item: Option<&mut DownloadItem>,
+            suggested_name: Option<&CefString>,
+            callback: Option<&mut BeforeDownloadCallback>,
+        ) -> ::std::os::raw::c_int {
+            let url = download_item
+                .map(|d| {
+                    let u = ImplDownloadItem::url(&*d);
+                    CefString::from(&u).to_string()
+                })
+                .unwrap_or_default();
+
+            let name = suggested_name
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "download".to_string());
+
+            let mut path = std::path::PathBuf::from(&name);
+
+            let should_download = if let Some(ref handler) = self.started_handler {
+                let h = handler.lock().unwrap();
+                h(url, &mut path)
+            } else {
+                true
+            };
+
+            if should_download {
+                if let Some(cb) = callback {
+                    let path_str = CefString::from(path.to_string_lossy().as_ref());
+                    ImplBeforeDownloadCallback::cont(cb, Some(&path_str), 0);
+                }
+            }
+
+            1 // handled
+        }
+
+        fn on_download_updated(
+            &self,
+            _browser: Option<&mut Browser>,
+            download_item: Option<&mut DownloadItem>,
+            _callback: Option<&mut DownloadItemCallback>,
+        ) {
+            let Some(item) = download_item else { return };
+
+            if ImplDownloadItem::is_complete(&*item) != 0 || ImplDownloadItem::is_canceled(&*item) != 0 {
+                let url_cef = ImplDownloadItem::url(&*item);
+                let url = CefString::from(&url_cef).to_string();
+                let path_cef = ImplDownloadItem::full_path(&*item);
+                let path_str = CefString::from(&path_cef).to_string();
+                let path = if path_str.is_empty() {
+                    None
+                } else {
+                    Some(std::path::PathBuf::from(&path_str))
+                };
+                let success = ImplDownloadItem::is_complete(&*item) != 0;
+
+                if let Some(ref handler) = self.completed_handler {
+                    let h = handler.lock().unwrap();
+                    h(url, path, success);
+                }
+
+                wrymium_log!("[wrymium] Download {}: {}", if success { "completed" } else { "failed" }, path_str);
+            }
+        }
     }
 }

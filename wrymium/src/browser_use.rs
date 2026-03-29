@@ -250,11 +250,39 @@ impl WebView {
 // ---------------------------------------------------------------------------
 
 impl WebView {
-    /// Navigate to a URL. If `wait` is true, waits for load event.
+    /// Navigate to a URL. If `wait` is true, waits for the page load event.
+    ///
+    /// When `wait` is true, subscribes to CDP events **before** dispatching
+    /// the navigation to avoid the race where `Page.loadEventFired` fires
+    /// before the subscription is active.
     pub fn navigate(&self, url: &str, wait: bool) -> CdpResult<()> {
+        // Subscribe BEFORE navigating to avoid missing loadEventFired
+        let rx = if wait {
+            Some(self.cdp_subscribe().ok_or(CdpError::NotReady)?)
+        } else {
+            None
+        };
+
         self.cdp("Page.navigate", serde_json::json!({ "url": url }))?;
-        if wait {
-            self.wait_for_navigation(CDP_TIMEOUT)?;
+
+        if let Some(rx) = rx {
+            let deadline = std::time::Instant::now() + CDP_TIMEOUT;
+            loop {
+                match rx.try_recv() {
+                    Ok(event) if event.method == "Page.loadEventFired" => return Ok(()),
+                    Ok(_) => {}
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        return Err(CdpError::ChannelClosed);
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        if std::time::Instant::now() > deadline {
+                            return Err(CdpError::Timeout);
+                        }
+                        cef::do_message_loop_work();
+                        std::thread::yield_now();
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -266,13 +294,23 @@ impl WebView {
 
 impl WebView {
     /// Take a fast screenshot optimized for LLM observation.
-    /// Uses JPEG quality 60 — much faster than PNG and sufficient for vision models.
+    ///
+    /// Uses JPEG quality 50 + `optimizeForSpeed` flag + `captureBeyondViewport: false`.
+    /// These CDP parameters skip expensive compositing and encoding steps.
     pub fn screenshot_fast(&self) -> CdpResult<Vec<u8>> {
-        self.screenshot(&ScreenshotOptions {
-            format: Some("jpeg".into()),
-            quality: Some(60),
-            ..Default::default()
-        })
+        let result = self.cdp(
+            "Page.captureScreenshot",
+            serde_json::json!({
+                "format": "jpeg",
+                "quality": 50,
+                "optimizeForSpeed": true,
+                "captureBeyondViewport": false,
+            }),
+        )?;
+        let data_b64 = result["data"]
+            .as_str()
+            .ok_or_else(|| CdpError::Json("missing 'data'".into()))?;
+        base64_decode(data_b64)
     }
 
     /// Take a screenshot. Returns PNG (or JPEG) image bytes.
@@ -477,6 +515,101 @@ impl WebView {
             .and_then(|r| r.get("value"))
             .cloned()
             .unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Execute JavaScript in a specific frame (by frame ID from `list_frames()`).
+    pub fn evaluate_in_frame(
+        &self,
+        frame_id: &str,
+        expression: &str,
+    ) -> CdpResult<serde_json::Value> {
+        // Get the execution context for this frame
+        let context_id = self.get_frame_context_id(frame_id)?;
+
+        let result = self.cdp_quick(
+            "Runtime.evaluate",
+            serde_json::json!({
+                "expression": expression,
+                "contextId": context_id,
+                "returnByValue": true,
+                "awaitPromise": true,
+            }),
+        )?;
+
+        if result.get("exceptionDetails").is_some() {
+            return Err(CdpError::MethodFailed(result));
+        }
+
+        Ok(result
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Find an element within a specific iframe.
+    pub fn find_element_in_frame(
+        &self,
+        frame_id: &str,
+        selector: &str,
+    ) -> CdpResult<Element> {
+        let js = format!(
+            r#"(() => {{
+                const el = document.querySelector({sel});
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return JSON.stringify({{x:r.x, y:r.y, w:r.width, h:r.height}});
+            }})()"#,
+            sel = serde_json::to_string(selector).unwrap_or_else(|_| "\"\"".into()),
+        );
+        let result = self.evaluate_in_frame(frame_id, &js)?;
+        if result.is_null() {
+            return Err(CdpError::Json(format!(
+                "no element matches '{selector}' in frame '{frame_id}'"
+            )));
+        }
+        let json_str = result
+            .as_str()
+            .ok_or_else(|| CdpError::Json("non-string".into()))?;
+        let v: serde_json::Value =
+            serde_json::from_str(json_str).map_err(|e| CdpError::Json(e.to_string()))?;
+
+        Ok(Element {
+            node_id: 0,
+            bounds: Some(ElementBounds {
+                x: v["x"].as_f64().unwrap_or(0.0),
+                y: v["y"].as_f64().unwrap_or(0.0),
+                width: v["w"].as_f64().unwrap_or(0.0),
+                height: v["h"].as_f64().unwrap_or(0.0),
+            }),
+            selector: selector.to_string(),
+        })
+    }
+
+    /// Get the JS execution context ID for a given frame.
+    fn get_frame_context_id(&self, frame_id: &str) -> CdpResult<i64> {
+        // Enable Runtime domain to get executionContextCreated events
+        // Then query for the frame's context
+        let result = self.cdp_quick(
+            "Runtime.evaluate",
+            serde_json::json!({
+                "expression": "0",
+                "returnByValue": true,
+            }),
+        )?;
+
+        // Use Page.createIsolatedWorld to get a context for the frame
+        let world = self.cdp_quick(
+            "Page.createIsolatedWorld",
+            serde_json::json!({
+                "frameId": frame_id,
+                "grantUniveralAccess": true,
+            }),
+        )?;
+
+        world["executionContextId"]
+            .as_i64()
+            .ok_or_else(|| CdpError::Json(format!("no context for frame '{frame_id}'")))
     }
 }
 
@@ -704,19 +837,21 @@ impl WebView {
     }
 
     /// Scroll at the given viewport position.
-    pub fn scroll(&self, x: i32, y: i32, delta_x: i32, delta_y: i32) -> crate::Result<()> {
-        let guard = self.browser.lock().unwrap();
-        let browser = guard.as_ref().ok_or(crate::Error::CefError("browser not ready".into()))?;
-        let host = ImplBrowser::host(browser)
-            .ok_or(crate::Error::CefError("host not available".into()))?;
-
-        let mouse_event = MouseEvent {
-            x,
-            y,
-            modifiers: 0,
-        };
-        ImplBrowserHost::send_mouse_wheel_event(&host, Some(&mouse_event), delta_x, delta_y);
-
+    ///
+    /// Uses CDP `Input.dispatchMouseEvent` (type=mouseWheel) which works reliably
+    /// in windowed mode. Native `send_mouse_wheel_event` requires window focus
+    /// which may not be available in test/automation contexts.
+    pub fn scroll(&self, x: i32, y: i32, delta_x: i32, delta_y: i32) -> CdpResult<()> {
+        self.cdp_quick(
+            "Input.dispatchMouseEvent",
+            serde_json::json!({
+                "type": "mouseWheel",
+                "x": x,
+                "y": y,
+                "deltaX": delta_x,
+                "deltaY": delta_y,
+            }),
+        )?;
         Ok(())
     }
 }
