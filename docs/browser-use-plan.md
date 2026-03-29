@@ -939,8 +939,11 @@ Comparison (vs Playwright MCP):
 | 新增 | `tests/fixtures/network.html` | 网络空闲测试（XHR 延迟） | 2 |
 | 新增 | `tests/fixtures/dynamic.html` | DOM 稳定性测试 | 2 |
 | 新增 | `tests/fixtures/a11y.html` | 无障碍树测试 | 2 |
+| 新增 | `tests/fixtures/iframe.html` | iframe 测试页面 | 2 |
 | 新增 | `examples/browser-use-agent/` | Agent 参考实现（TS，5 文件，718 行） | 4 |
-| 新增 | `examples/cdp-test/` | CDP + Browser Use 集成测试（17 项） | 测试 |
+| 新增 | `examples/cdp-test/` | CDP + Browser Use 集成测试（35 项） | 测试 |
+| 新增 | `examples/bench/` | 微观性能基准（16 项） | 测试 |
+| 新增 | `benchmarks/playwright_bench.mjs` | Playwright 对比基准 | 测试 |
 | 修改 | `tauri-runtime-wry/src/lib.rs` | CdpSend / CdpSubscribe message dispatch | 3 |
 | 修改 | `tauri-runtime-wry/Cargo.toml` | wry 改为 path 依赖 | 3 |
 
@@ -955,11 +958,13 @@ Comparison (vs Playwright MCP):
 | Phase | 文件 | 行数 | 编译 | 测试 |
 |-------|------|------|------|------|
 | 1. CDP Bridge | `wrymium/src/cdp.rs` | 355 | ✅ | 9 CDP + 7 可靠性 |
-| 2. Browser Use | `wrymium/src/browser_use.rs` | 1200+ | ✅ | 19 集成测试 |
+| 2. Browser Use | `wrymium/src/browser_use.rs` | 1300+ | ✅ | 20 集成测试 |
+| 2b. iframe | `evaluate_in_frame`, `find_element_in_frame` | — | ✅ | iframe.html fixture |
+| 2c. DownloadHandler | `wrap_download_handler!` in webview.rs | +90 | ✅ | — |
 | 3. Tauri Commands | `tauri-runtime-wry/src/lib.rs` | +26 | ✅ | — |
 | 4. Agent Loop | `examples/browser-use-agent/src/` | 718 | — (TS) | — |
-| 测试 | `examples/cdp-test/`, `wrymium/src/tests.rs` | 1100+ | ✅ | 92 项全通过 |
-| 性能基准 | `examples/bench/`, `benchmarks/` | 500+ | ✅ | 16 项 micro + Playwright 对比 |
+| 测试 | `examples/cdp-test/`, `wrymium/src/tests.rs` | 1200+ | ✅ | 92 项全通过 |
+| 性能基准 | `examples/bench/`, `benchmarks/` | 600+ | ✅ | 16 项 micro + Playwright 对比 |
 
 ### 设计方案 vs 实际实现的差异
 
@@ -1082,16 +1087,15 @@ Navigate (file://)            14.7ms         1.93ms            0.13x      🔵 P
 ### 已知问题与限制
 
 1. **`with_html()` (data: URI) 不执行 `<script>`**: wrymium 的 `form_urlencoded::byte_serialize` 编码破坏了 JS 中的特殊字符。建议用 `with_url("file://...")` 或自定义 protocol 代替。
-2. **`send_mouse_wheel_event` 在 windowed 模式下无效**: CEF windowed 模式需要窗口 focus 才能接收滚动事件。Workaround: 用 JS `window.scrollTo()` 或 `element.scrollIntoView()` 代替。
-3. **`wait_for_navigation` 存在竞态**: 如果 `Page.loadEventFired` 在订阅之前触发，会 miss 事件导致超时。Workaround: 用 `navigate(url, false)` + 轮询 `document.readyState` 或 `document.title`。
-4. **Windows `multi_threaded_message_loop` 未验证**: `send_blocking` 的 `do_message_loop_work()` 泵在 Windows 上的行为需要单独验证。
-5. **iframe 支持**: 设计方案预留了 `frame_id` 参数，当前实现未包含，所有操作针对 main frame。
-6. **CefDownloadHandler**: builder API 已存在但 CEF 回调未接入。
+2. **Windows `multi_threaded_message_loop` 未验证**: `send_blocking` 的 `do_message_loop_work()` 泵在 Windows 上的行为需要单独验证。
+3. ~~`send_mouse_wheel_event` 在 windowed 模式下无效~~ — **已修复**: 改用 CDP `Input.dispatchMouseEvent(mouseWheel)`。
+4. ~~`wait_for_navigation` 存在竞态~~ — **已修复**: 先订阅 CDP 事件再发送 `Page.navigate`。
+5. ~~iframe 支持未实现~~ — **已实现**: `evaluate_in_frame()` + `find_element_in_frame()` + `Page.createIsolatedWorld`。
+6. ~~CefDownloadHandler 未接入~~ — **已实现**: `wrap_download_handler!` 绑定到 builder 的 `download_started_handler` / `download_completed_handler`。
 
 ### 未来扩展
 
 - **端到端 Agent 评估**: 需要 Claude API key + 完整 Tauri app 集成，评估任务成功率/步数/token 消耗
-- **iframe 支持**: `find_element` / `evaluate` 支持 `frame_id` 参数
-- **CefDownloadHandler 接入**: 绑定 CEF 下载回调到 builder API
-- **`send_mouse_wheel_event` 修复**: 调查 windowed 模式下 focus/event 传递问题
-- **OSR 截图模式**: 切换到 offscreen rendering 可能改善截图延迟（当前 50ms PNG）
+- **OSR 截图模式**: 切换到 offscreen rendering 可能进一步改善 PNG 截图延迟（当前 50ms，JPEG 33ms）
+- **iframe click_element**: 当前 `find_element_in_frame` 返回 frame 内的视口坐标，点击需要额外加上 iframe 在主页面的偏移
+- **Windows / Linux 平台验证**: 当前仅在 macOS Apple Silicon 上验证
