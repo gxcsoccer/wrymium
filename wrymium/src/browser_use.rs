@@ -590,7 +590,7 @@ impl WebView {
     fn get_frame_context_id(&self, frame_id: &str) -> CdpResult<i64> {
         // Enable Runtime domain to get executionContextCreated events
         // Then query for the frame's context
-        let result = self.cdp_quick(
+        let _result = self.cdp_quick(
             "Runtime.evaluate",
             serde_json::json!({
                 "expression": "0",

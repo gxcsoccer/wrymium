@@ -164,6 +164,8 @@ wrap_resource_handler! {
             // Extract full request info (including POST body) in open()
             // because create() doesn't always have the body ready
             let (method, url, headers, body) = extract_request_info(request);
+            #[cfg(debug_assertions)]
+            eprintln!("[wrymium/scheme] open: webview={} {} {}", self.webview_id, method, url);
 
             // Build http::Request
             let mut builder = http::Request::builder().method(method.as_str()).uri(&url);
@@ -176,7 +178,18 @@ wrap_resource_handler! {
 
             // Create responder that signals CEF when done
             let state_for_callback = self.state.clone();
+            #[cfg(debug_assertions)]
+            let url_for_log = url.clone();
             let responder = RequestAsyncResponder::new(Box::new(move |http_response| {
+                #[cfg(debug_assertions)]
+                {
+                    let ct = http_response.headers().get("content-type")
+                        .and_then(|v| v.to_str().ok()).unwrap_or("(none)");
+                    let body_preview = std::str::from_utf8(&http_response.body()[..http_response.body().len().min(120)])
+                        .unwrap_or("(binary)");
+                    eprintln!("[wrymium/scheme] respond: {} status={} ct={} body={}b preview={:?}",
+                        url_for_log, http_response.status(), ct, http_response.body().len(), body_preview);
+                }
                 let mut state = state_for_callback.lock().unwrap();
                 let stored_callback = if let ResponseState::Pending { callback } = &mut *state {
                     callback.take()

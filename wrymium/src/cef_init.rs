@@ -30,15 +30,22 @@ pub fn is_cef_subprocess() -> bool {
 /// Run the CEF subprocess entry point. Returns the exit code.
 /// Call `std::process::exit()` with the return value if `is_cef_subprocess()` is true.
 pub fn run_cef_subprocess() -> i32 {
+    // Log process type at very start, before CEF loads
+    let process_type = std::env::args()
+        .find(|a| a.starts_with("--type="))
+        .unwrap_or_else(|| "(no --type)".to_string());
+    eprintln!("[wrymium:subprocess] STARTING type={}", process_type);
+
     #[cfg(target_os = "macos")]
     {
         let exe = std::env::current_exe().unwrap();
         // helper = true: path resolves as exe/../../../CEF.framework
         let loader = cef::library_loader::LibraryLoader::new(&exe, true);
         if !loader.load() {
-            wrymium_log!("[wrymium] Failed to load CEF library in subprocess");
+            eprintln!("[wrymium:subprocess] FAILED to load CEF library, type={}", process_type);
             return 1;
         }
+        eprintln!("[wrymium:subprocess] CEF library loaded, type={}", process_type);
         let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
 
         // Pass WrymiumApp so renderer subprocesses get the RenderProcessHandler
@@ -49,6 +56,7 @@ pub fn run_cef_subprocess() -> i32 {
             Some(&mut app),
             std::ptr::null_mut(),
         );
+        eprintln!("[wrymium:subprocess] {} execute_process returned {}", process_type, ret);
         return ret;
     }
 
@@ -61,6 +69,7 @@ pub fn run_cef_subprocess() -> i32 {
             Some(&mut app),
             std::ptr::null_mut(),
         );
+        eprintln!("[wrymium:subprocess] {} execute_process returned {}", process_type, ret);
         return ret;
     }
 }
@@ -230,10 +239,26 @@ wrap_app! {
                 let key = CefString::from("renderer-process-limit");
                 let val = CefString::from("1");
                 ImplCommandLine::append_switch_with_value(cmd, Some(&key), Some(&val));
+
+                // In debug builds, disable proxy and background networking to
+                // avoid interference with CEF renderer IPC during development.
+                // NOT applied in release builds — users may rely on system proxy.
+                #[cfg(debug_assertions)]
+                {
+                    let no_proxy = CefString::from("no-proxy-server");
+                    ImplCommandLine::append_switch(cmd, Some(&no_proxy));
+
+                    let no_bg_net = CefString::from("disable-background-networking");
+                    ImplCommandLine::append_switch(cmd, Some(&no_bg_net));
+                }
             }
         }
 
         fn on_register_custom_schemes(&self, registrar: Option<&mut SchemeRegistrar>) {
+            let process_type = std::env::args()
+                .find(|a| a.starts_with("--type="))
+                .unwrap_or_else(|| "browser".to_string());
+            eprintln!("[wrymium:app] on_register_custom_schemes process_type={}", process_type);
             if let Some(registrar) = registrar {
                 crate::scheme::register_custom_schemes(registrar);
             }

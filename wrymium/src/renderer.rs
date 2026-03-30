@@ -39,6 +39,7 @@ wrap_render_process_handler! {
         ) {
             let Some(browser) = browser else { return };
             let browser_id = ImplBrowser::identifier(browser);
+            eprintln!("[wrymium:renderer] on_browser_created browser_id={browser_id}");
 
             let mut scripts = Vec::new();
             if let Some(extra) = extra_info {
@@ -101,9 +102,10 @@ wrap_render_process_handler! {
             frame: Option<&mut Frame>,
             context: Option<&mut V8Context>,
         ) {
-            let Some(browser) = browser else { return };
-            let Some(frame) = frame else { return };
-            let Some(context) = context else { return };
+            let Some(browser) = browser else { eprintln!("[wrymium:renderer] on_context_created: no browser"); return };
+            let Some(frame) = frame else { eprintln!("[wrymium:renderer] on_context_created: no frame"); return };
+            let Some(context) = context else { eprintln!("[wrymium:renderer] on_context_created: no context"); return };
+            eprintln!("[wrymium:renderer] on_context_created browser_id={}", ImplBrowser::identifier(browser));
 
             if ImplFrame::is_main(frame) != 1 {
                 return;

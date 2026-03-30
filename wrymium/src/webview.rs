@@ -403,18 +403,92 @@ impl WebView {
         // Create WindowInfo with set_as_child.
         // On macOS, CEF sets NSViewWidthSizable | NSViewHeightSizable autoresizing masks,
         // so the browser view auto-fills the parent after the first layout.
-        // We set the initial bounds to match the parent to avoid a visible resize flash.
+        //
+        // If builder.bounds is set, we create a container NSView at the desired position/size
+        // and use it as the parent for CEF. CEF then auto-fills the container, achieving
+        // the correct layout without needing set_bounds() (which is a no-op on macOS).
         #[cfg(target_os = "macos")]
-        let (init_w, init_h) = {
-            use objc2_app_kit::NSView;
+        let (window_handle, init_w, init_h) = {
+            use objc2::{MainThreadMarker, MainThreadOnly};
+            use objc2_app_kit::{NSAutoresizingMaskOptions, NSView};
             use objc2::rc::Retained;
-            let ns_view = unsafe { Retained::retain(window_handle as *mut NSView) };
-            match ns_view {
-                Some(view) => {
-                    let frame = view.frame();
-                    (frame.size.width as i32, frame.size.height as i32)
+            use objc2_core_foundation::{CGFloat, CGPoint, CGRect, CGSize};
+
+            let parent_view = unsafe { Retained::retain(window_handle as *mut NSView) };
+
+            if let Some(ref bounds) = builder.bounds {
+                // Resolve scale factor from the parent window (default 2.0 for Retina)
+                let scale_factor: CGFloat = parent_view
+                    .as_ref()
+                    .and_then(|v| v.window())
+                    .map(|w| w.backingScaleFactor())
+                    .unwrap_or(2.0);
+
+                // Convert bounds to logical points (NSView uses logical coordinates)
+                let (lx, ly) = match bounds.position {
+                    dpi::Position::Logical(p) => (p.x, p.y),
+                    dpi::Position::Physical(p) => {
+                        (p.x as f64 / scale_factor, p.y as f64 / scale_factor)
+                    }
+                };
+                let (lw, lh) = match bounds.size {
+                    dpi::Size::Logical(s) => (s.width, s.height),
+                    dpi::Size::Physical(s) => {
+                        (s.width as f64 / scale_factor, s.height as f64 / scale_factor)
+                    }
+                };
+
+                // NSView uses bottom-left origin unless the view is flipped.
+                // Convert the top-left logical position to NSView frame origin.
+                //
+                // On macOS, Tauri creates windows with NSFullSizeContentViewWindowMask,
+                // meaning the contentView frame includes the title bar area.
+                // We must use contentLayoutRect (the non-obscured area below the title bar)
+                // rather than the raw frame height so the container is correctly placed
+                // within the visible content area.
+                let parent_h = parent_view
+                    .as_ref()
+                    .and_then(|v| v.window())
+                    .map(|w| w.contentLayoutRect().size.height)
+                    .or_else(|| parent_view.as_ref().map(|v| v.frame().size.height))
+                    .unwrap_or(lh + ly);
+                let is_flipped = parent_view
+                    .as_ref()
+                    .map(|v| v.isFlipped())
+                    .unwrap_or(false);
+                let y_nsview = if is_flipped { ly } else { parent_h - ly - lh };
+
+                // Create a container NSView with fixed size (no autoresizing).
+                // CEF will embed its NSView inside this container and auto-fill it.
+                // WebView creation must happen on the main thread — safe to use unchecked MTM.
+                let frame = CGRect {
+                    origin: CGPoint { x: lx, y: y_nsview },
+                    size: CGSize { width: lw, height: lh },
+                };
+                let mtm = unsafe { MainThreadMarker::new_unchecked() };
+                let container = NSView::initWithFrame(NSView::alloc(mtm), frame);
+                container.setAutoresizingMask(NSAutoresizingMaskOptions::empty());
+                if let Some(parent) = &parent_view {
+                    parent.addSubview(&container);
                 }
-                None => (1280, 860),
+                // addSubview retains the container (refcount = 2).
+                // Get a raw pointer before letting `container` drop (refcount → 1).
+                // The parent continues to hold the container alive; CEF will
+                // also retain it when it attaches as a child NSView.
+                let container_ptr = Retained::as_ptr(&container) as *const std::ffi::c_void as *mut std::ffi::c_void;
+                // `container` drops here — parent's retain keeps it alive.
+                drop(container);
+                (container_ptr, lw as i32, lh as i32)
+            } else {
+                // No bounds — fill the entire parent view (original behavior)
+                let (w, h) = parent_view
+                    .as_ref()
+                    .map(|v| {
+                        let f = v.frame();
+                        (f.size.width as i32, f.size.height as i32)
+                    })
+                    .unwrap_or((1280, 860));
+                (window_handle, w, h)
             }
         };
         #[cfg(not(target_os = "macos"))]
