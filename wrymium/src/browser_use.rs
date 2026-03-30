@@ -492,8 +492,8 @@ impl WebView {
             .collect())
     }
 
-    /// Execute JavaScript and return the result.
-    /// Resolves the current `evaluate_script` TODO (no return value).
+    /// Execute JavaScript and return the result via CDP `Runtime.evaluate`.
+    /// Unlike `WebView::evaluate_script`, this returns the evaluated value.
     pub fn evaluate(&self, expression: &str) -> CdpResult<serde_json::Value> {
         let result = self.cdp_quick(
             "Runtime.evaluate",

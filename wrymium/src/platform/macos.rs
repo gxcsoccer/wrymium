@@ -17,6 +17,8 @@ pub trait WebViewBuilderExtMacos {
     fn with_webview_configuration(self, config: *mut c_void) -> Self;
 
     /// Set the traffic light inset position.
+    /// No-op in CEF — traffic light positioning is managed by Tauri at the
+    /// NSWindow level, not by the embedded browser view.
     fn with_traffic_light_inset(self, position: dpi::Position) -> Self;
 }
 
@@ -27,7 +29,8 @@ impl<'a> WebViewBuilderExtMacos for WebViewBuilder<'a> {
     }
 
     fn with_traffic_light_inset(self, _position: dpi::Position) -> Self {
-        // TODO: Could be mapped to CefWindowInfo positioning
+        // No-op — traffic light (close/minimize/zoom) buttons are positioned
+        // by Tauri's NSWindow configuration, not by the embedded browser view.
         self
     }
 }
@@ -71,8 +74,16 @@ pub trait WebViewExtMacOS {
 
 impl WebViewExtMacOS for WebView {
     fn webview(&self) -> *mut c_void {
-        // TODO: Return the CEF browser's NSView pointer
-        // browser_host.get_window_handle() on macOS returns the NSView
+        // On macOS, browser_host.window_handle() returns the CEF browser's NSView.
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
+            if let Some(host) = cef::ImplBrowser::host(browser) {
+                let handle = cef::ImplBrowserHost::window_handle(&host);
+                if !handle.is_null() {
+                    return handle;
+                }
+            }
+        }
         std::ptr::null_mut()
     }
 
@@ -82,13 +93,49 @@ impl WebViewExtMacOS for WebView {
     }
 
     fn ns_window(&self) -> *mut c_void {
-        // TODO: Get the parent NSWindow from the browser's view hierarchy
+        // Get the NSView via window_handle(), then walk up to the parent NSWindow.
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
+            if let Some(host) = cef::ImplBrowser::host(browser) {
+                let handle = cef::ImplBrowserHost::window_handle(&host);
+                if !handle.is_null() {
+                    use objc2_app_kit::NSView;
+                    let view = unsafe { &*(handle as *const NSView) };
+                    if let Some(window) = view.window() {
+                        return objc2::rc::Retained::as_ptr(&window) as *mut c_void;
+                    }
+                }
+            }
+        }
         std::ptr::null_mut()
     }
 
-    fn reparent(&self, _window: *mut c_void) -> Result<()> {
-        // TODO: Remove CEF browser view from current parent,
-        // add to new NSWindow's contentView
+    fn reparent(&self, window: *mut c_void) -> Result<()> {
+        if window.is_null() {
+            return Ok(());
+        }
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
+            if let Some(host) = cef::ImplBrowser::host(browser) {
+                let handle = cef::ImplBrowserHost::window_handle(&host);
+                if !handle.is_null() {
+                    use objc2_app_kit::{NSAutoresizingMaskOptions, NSView, NSWindow};
+                    let view = unsafe { &*(handle as *const NSView) };
+                    let new_window = unsafe { &*(window as *const NSWindow) };
+                    // Remove from current parent
+                    view.removeFromSuperview();
+                    // Add to new window's content view and fill it
+                    if let Some(content_view) = new_window.contentView() {
+                        view.setFrame(content_view.bounds());
+                        view.setAutoresizingMask(
+                            NSAutoresizingMaskOptions::ViewWidthSizable
+                                | NSAutoresizingMaskOptions::ViewHeightSizable,
+                        );
+                        content_view.addSubview(view);
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }

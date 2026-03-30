@@ -1,4 +1,7 @@
-//! Windows platform extension traits (stubs for v0.1).
+//! Windows platform extension traits.
+//!
+//! Reparenting requires Win32 `SetParent` API on the CEF HWND —
+//! not implemented yet since wrymium is currently macOS-focused.
 
 use crate::error::Result;
 use crate::types::{ScrollBarStyle, Theme};
@@ -32,7 +35,9 @@ pub trait WebViewExtWindows {
 
 impl WebViewExtWindows for WebView {
     fn reparent(&self, _hwnd: isize) -> Result<()> {
-        // TODO: Use SetParent Win32 API on CEF's HWND
+        // Not implemented — requires Win32 SetParent(cef_hwnd, new_parent_hwnd).
+        // CEF's window_handle() returns the HWND which could be reparented,
+        // but this path is untested.
         Ok(())
     }
 }

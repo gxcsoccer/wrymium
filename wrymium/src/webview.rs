@@ -66,6 +66,8 @@ pub struct WebViewBuilder<'a> {
     pub(crate) on_page_load_handler: Option<Box<dyn Fn(PageLoadEvent, String) + 'static>>,
     pub(crate) drag_drop_handler: Option<Box<dyn Fn(DragDropEvent) -> bool + 'static>>,
     pub(crate) data_store_identifier: Option<[u8; 16]>,
+    pub(crate) theme: Option<Theme>,
+    pub(crate) scroll_bar_style: Option<ScrollBarStyle>,
 }
 
 impl<'a> WebViewBuilder<'a> {
@@ -100,6 +102,8 @@ impl<'a> WebViewBuilder<'a> {
             on_page_load_handler: None,
             drag_drop_handler: None,
             data_store_identifier: None,
+            theme: None,
+            scroll_bar_style: None,
         }
     }
 
@@ -326,12 +330,14 @@ impl<'a> WebViewBuilder<'a> {
         self // No-op — CEF has its own command line handling
     }
 
-    pub fn with_theme(self, _theme: Theme) -> Self {
-        self // TODO: Windows theme support
+    pub fn with_theme(mut self, theme: Theme) -> Self {
+        self.theme = Some(theme);
+        self
     }
 
-    pub fn with_scroll_bar_style(self, _style: ScrollBarStyle) -> Self {
-        self // TODO: Windows scrollbar style
+    pub fn with_scroll_bar_style(mut self, style: ScrollBarStyle) -> Self {
+        self.scroll_bar_style = Some(style);
+        self
     }
 
     pub fn with_browser_extensions_enabled(self, _enabled: bool) -> Self {
@@ -381,7 +387,7 @@ pub struct WebView {
 
 impl WebView {
     pub(crate) fn create<W: HasWindowHandle>(
-        builder: WebViewBuilder,
+        mut builder: WebViewBuilder,
         window: &W,
         _as_child: bool,
     ) -> Result<Self> {
@@ -396,6 +402,14 @@ impl WebView {
         } else {
             builder.url.unwrap_or_else(|| "about:blank".to_string())
         };
+
+        // Inject init scripts for theme and scrollbar style
+        if let Some(script) = builder.theme.and_then(theme_init_script) {
+            builder.initialization_scripts.push((script, false));
+        }
+        if let Some(script) = builder.scroll_bar_style.and_then(scrollbar_init_script) {
+            builder.initialization_scripts.push((script, false));
+        }
 
         // Get the native window handle
         let window_handle = get_native_handle(window)?;
@@ -663,8 +677,24 @@ impl WebView {
     // --- Display ---
 
     pub fn set_visible(&self, visible: bool) -> Result<()> {
-        // TODO: Show/hide the CEF browser view
-        let _ = visible;
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
+            if let Some(host) = ImplBrowser::host(browser) {
+                // Notify CEF about visibility change (controls rendering/compositing)
+                ImplBrowserHost::was_hidden(&host, if visible { 0 } else { 1 });
+
+                // Actually hide/show the native view
+                #[cfg(target_os = "macos")]
+                {
+                    let handle = ImplBrowserHost::window_handle(&host);
+                    if !handle.is_null() {
+                        use objc2_app_kit::NSView;
+                        let view = unsafe { &*(handle as *const NSView) };
+                        view.setHidden(!visible);
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -677,7 +707,33 @@ impl WebView {
     }
 
     pub fn bounds(&self) -> Result<Rect> {
-        // TODO: Query the browser view's frame
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
+            if let Some(host) = ImplBrowser::host(browser) {
+                let handle = ImplBrowserHost::window_handle(&host);
+                if !handle.is_null() {
+                    #[cfg(target_os = "macos")]
+                    {
+                        use objc2_app_kit::NSView;
+                        let view = unsafe { &*(handle as *const NSView) };
+                        let frame = view.frame();
+                        return Ok(Rect {
+                            position: dpi::Position::Logical(dpi::LogicalPosition::new(
+                                frame.origin.x,
+                                frame.origin.y,
+                            )),
+                            size: dpi::Size::Logical(dpi::LogicalSize::new(
+                                frame.size.width,
+                                frame.size.height,
+                            )),
+                        });
+                    }
+
+                    // TODO: Windows — use GetWindowRect(hwnd)
+                    // TODO: Linux — use XGetGeometry or gtk_widget_get_allocation
+                }
+            }
+        }
         Ok(Rect::default())
     }
 
@@ -928,6 +984,36 @@ fn get_native_handle<W: HasWindowHandle>(window: &W) -> Result<cef::sys::cef_win
             Ok(h.window as cef::sys::cef_window_handle_t)
         }
         _ => Err(Error::UnsupportedWindowHandle),
+    }
+}
+
+// --- Theme / scrollbar init scripts ---
+
+/// Generate an init script that forces the CEF WebView color scheme.
+/// Applied via `document.documentElement.style.colorScheme` before page JS runs.
+pub(crate) fn theme_init_script(theme: Theme) -> Option<String> {
+    match theme {
+        Theme::Dark => Some(
+            "document.documentElement.style.colorScheme='dark';".into(),
+        ),
+        Theme::Light => Some(
+            "document.documentElement.style.colorScheme='light';".into(),
+        ),
+    }
+}
+
+/// Generate an init script for thin overlay scrollbars (matches WebView2 FluentOverlay).
+pub(crate) fn scrollbar_init_script(style: ScrollBarStyle) -> Option<String> {
+    match style {
+        ScrollBarStyle::FluentOverlay => Some(
+            "(function(){var s=document.createElement('style');\
+             s.textContent='::-webkit-scrollbar{width:8px;height:8px}\
+             ::-webkit-scrollbar-thumb{background:rgba(128,128,128,.4);border-radius:4px}\
+             ::-webkit-scrollbar-track{background:transparent}';\
+             (document.head||document.documentElement).appendChild(s)})()"
+                .into(),
+        ),
+        ScrollBarStyle::Default => None,
     }
 }
 

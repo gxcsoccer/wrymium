@@ -90,6 +90,9 @@ cargo wrymium run --release    # 优化模式（LTO + strip）
 |------|------|------|
 | `basic` | IPC 测试（postMessage + 自定义协议 + 脚本注入） | `cargo wrymium run` |
 | `feishu` | 飞书文档查看器 | `cd examples/feishu && cargo wrymium run` |
+| `webview-control` | 运行时 WebView 控制 API（可见性、bounds、缩放、主题、reparent） | `cd examples/webview-control && cargo wrymium run` |
+| `cdp-test` | Chrome DevTools Protocol 桥接测试 | `cd examples/cdp-test && cargo wrymium run` |
+| `bench` | 性能基准测试 | `cd examples/bench && cargo wrymium run` |
 | `tauri-app` | 完整 Tauri 2.x 应用 + `invoke()` IPC | 见 [使用教程](docs/getting-started.md) |
 
 ## 开发工具
@@ -121,6 +124,8 @@ Tauri 应用
 - **IPC**：Tauri 的 `invoke()` 经过 `fetch('ipc://localhost/cmd')` → `CefSchemeHandlerFactory` → 异步 `CefResourceHandler` → Tauri 命令分发（0.48ms 往返）
 - **脚本注入**：browser → renderer 通过 `extra_info`（`DictionaryValue`），含竞态延迟注入
 - **V8 桥接**：`window.ipc.postMessage` 通过 `CefV8Handler` + `CefProcessMessage` 实现回退路径
+- **WebView 控制**：运行时 API 支持可见性控制（`was_hidden` + `NSView.setHidden`）、bounds 查询、缩放（`CefBrowserHost` zoom level）、聚焦、打印、主题/滚动条样式（CSS init script 注入）
+- **macOS 平台**：原生 `NSView`/`NSWindow` 指针访问、带 autoresizing mask 的 reparent
 
 ## 与 Tauri 官方 CEF 计划的关系
 

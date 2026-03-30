@@ -303,11 +303,42 @@ mod webview_builder_tests {
         let _ = WebViewBuilder::new()
             .with_https_scheme(true)
             .with_additional_browser_args("--flag")
-            .with_theme(crate::types::Theme::Dark)
-            .with_scroll_bar_style(crate::types::ScrollBarStyle::Default)
             .with_browser_extensions_enabled(true)
             .with_extensions_path(std::path::Path::new("/tmp"))
             .with_allow_link_preview(true);
+    }
+
+    #[test]
+    fn builder_with_theme_stores_value() {
+        let builder = WebViewBuilder::new().with_theme(crate::types::Theme::Dark);
+        assert_eq!(builder.theme, Some(crate::types::Theme::Dark));
+
+        let builder = WebViewBuilder::new().with_theme(crate::types::Theme::Light);
+        assert_eq!(builder.theme, Some(crate::types::Theme::Light));
+    }
+
+    #[test]
+    fn builder_with_scroll_bar_style_stores_value() {
+        let builder = WebViewBuilder::new()
+            .with_scroll_bar_style(crate::types::ScrollBarStyle::FluentOverlay);
+        assert_eq!(
+            builder.scroll_bar_style,
+            Some(crate::types::ScrollBarStyle::FluentOverlay)
+        );
+
+        let builder = WebViewBuilder::new()
+            .with_scroll_bar_style(crate::types::ScrollBarStyle::Default);
+        assert_eq!(
+            builder.scroll_bar_style,
+            Some(crate::types::ScrollBarStyle::Default)
+        );
+    }
+
+    #[test]
+    fn builder_theme_default_is_none() {
+        let builder = WebViewBuilder::new();
+        assert!(builder.theme.is_none());
+        assert!(builder.scroll_bar_style.is_none());
     }
 }
 
@@ -329,13 +360,78 @@ mod lib_tests {
         let version = crate::webview_version();
         assert!(version.is_ok());
         let v = version.unwrap();
-        assert!(v.contains("CEF"));
-        assert!(v.contains("wrymium"));
+        assert!(v.contains("wrymium"), "version must contain 'wrymium': {v}");
+        // Now uses actual CEF_VERSION from cef-dll-sys — contains chromium info
+        assert!(
+            v.contains("chromium"),
+            "version must contain 'chromium' from CEF_VERSION: {v}"
+        );
+    }
+
+    #[test]
+    fn webview_version_format() {
+        let v = crate::webview_version().unwrap();
+        // Format: "<major>.<minor>.<patch>+...+chromium-... (wrymium)"
+        assert!(v.ends_with("(wrymium)"), "must end with (wrymium): {v}");
+        // Should start with a numeric major version (e.g. "146.")
+        assert!(
+            v.chars().next().unwrap().is_ascii_digit(),
+            "version must start with a digit: {v}"
+        );
+        assert!(v.contains('.'), "version must contain dot separator: {v}");
     }
 
     #[test]
     fn is_cef_subprocess_false_in_tests() {
         assert!(!crate::is_cef_subprocess());
+    }
+}
+
+// ==========================================================================
+// Theme and scrollbar init script tests
+// ==========================================================================
+
+#[cfg(test)]
+mod theme_scrollbar_tests {
+    use crate::types::{ScrollBarStyle, Theme};
+    use crate::webview::{scrollbar_init_script, theme_init_script};
+
+    #[test]
+    fn theme_dark_generates_script() {
+        let script = theme_init_script(Theme::Dark);
+        assert!(script.is_some());
+        let s = script.unwrap();
+        assert!(s.contains("colorScheme"), "must set colorScheme: {s}");
+        assert!(s.contains("dark"), "must contain 'dark': {s}");
+    }
+
+    #[test]
+    fn theme_light_generates_script() {
+        let script = theme_init_script(Theme::Light);
+        assert!(script.is_some());
+        let s = script.unwrap();
+        assert!(s.contains("colorScheme"), "must set colorScheme: {s}");
+        assert!(s.contains("light"), "must contain 'light': {s}");
+    }
+
+    #[test]
+    fn scrollbar_fluent_overlay_generates_css() {
+        let script = scrollbar_init_script(ScrollBarStyle::FluentOverlay);
+        assert!(script.is_some());
+        let s = script.unwrap();
+        assert!(
+            s.contains("::-webkit-scrollbar"),
+            "must contain scrollbar CSS selector: {s}"
+        );
+        assert!(
+            s.contains("border-radius"),
+            "must style rounded thumb: {s}"
+        );
+    }
+
+    #[test]
+    fn scrollbar_default_returns_none() {
+        assert!(scrollbar_init_script(ScrollBarStyle::Default).is_none());
     }
 }
 

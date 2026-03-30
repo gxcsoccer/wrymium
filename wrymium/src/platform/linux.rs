@@ -1,4 +1,7 @@
-//! Linux platform extension traits (stubs for v0.1).
+//! Linux platform extension traits.
+//!
+//! Reparenting requires X11 `XReparentWindow` or GTK `gtk_widget_reparent` —
+//! not implemented yet since wrymium is currently macOS-focused.
 
 use crate::error::Result;
 use crate::webview::{WebView, WebViewBuilder};
@@ -19,7 +22,9 @@ pub trait WebViewExtUnix {
 
 impl WebViewExtUnix for WebView {
     fn reparent(&self) -> Result<()> {
-        // TODO: X11 reparent or GTK container manipulation
+        // Not implemented — requires X11/Wayland backend.
+        // CEF's window_handle() returns the X11 Window ID which could be
+        // reparented via XReparentWindow, but this path is untested.
         Ok(())
     }
 }

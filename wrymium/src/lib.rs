@@ -47,8 +47,11 @@ pub use platform::linux::{WebViewBuilderExtUnix, WebViewExtUnix};
 /// Returns the CEF version string.
 /// Compatible with `wry::webview_version()`.
 pub fn webview_version() -> Result<String> {
-    // TODO: Return actual CEF version from cef::version()
-    Ok("CEF-146.0.6 (wrymium)".to_string())
+    // CEF_VERSION from cef-dll-sys: e.g. "146.0.6+g68649e2+chromium-146.0.7680.154\0"
+    let bytes = cef::sys::CEF_VERSION;
+    let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    let version = std::str::from_utf8(&bytes[..len]).unwrap_or("unknown");
+    Ok(format!("{version} (wrymium)"))
 }
 
 /// Check if the current process is a CEF subprocess.

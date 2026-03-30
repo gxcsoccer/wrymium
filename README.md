@@ -93,6 +93,9 @@ cargo wrymium run --release    # optimized (LTO + strip)
 |---------|-------------|---------|
 | `basic` | IPC test (postMessage + custom protocol + init scripts) | `cargo wrymium run` |
 | `feishu` | Feishu document viewer | `cd examples/feishu && cargo wrymium run` |
+| `webview-control` | Runtime WebView APIs (visibility, bounds, zoom, theme, reparent) | `cd examples/webview-control && cargo wrymium run` |
+| `cdp-test` | Chrome DevTools Protocol bridge test | `cd examples/cdp-test && cargo wrymium run` |
+| `bench` | Performance benchmarks | `cd examples/bench && cargo wrymium run` |
 | `tauri-app` | Full Tauri 2.x app with `invoke()` IPC | See [Getting Started](docs/getting-started.md) |
 
 ## Developer Tools
@@ -124,6 +127,8 @@ Tauri App
 - **IPC**: Tauri's `invoke()` goes through `fetch('ipc://localhost/cmd')` → `CefSchemeHandlerFactory` → async `CefResourceHandler` → Tauri command dispatch (0.48ms round-trip)
 - **Script injection**: Browser → renderer via `extra_info` (`DictionaryValue`), with deferred injection for race conditions
 - **V8 bridge**: `window.ipc.postMessage` via `CefV8Handler` + `CefProcessMessage` for fallback path
+- **WebView control**: Runtime APIs for visibility (`was_hidden` + `NSView.setHidden`), bounds query, zoom (`CefBrowserHost` zoom level), focus, print, theme/scrollbar style (CSS init script injection)
+- **macOS platform**: Native `NSView`/`NSWindow` pointer access, reparenting with autoresizing mask
 
 ## Project Structure
 
@@ -136,6 +141,9 @@ wrymium/
   ├── examples/
   │   ├── basic/                 # IPC test
   │   ├── feishu/                # Feishu doc viewer
+  │   ├── webview-control/       # runtime WebView control APIs
+  │   ├── cdp-test/              # CDP bridge test
+  │   ├── bench/                 # performance benchmarks
   │   └── tauri-app/             # full Tauri 2.x app
   ├── scripts/bundle-macos.sh    # shell-based bundler
   └── docs/                      # spec, benchmark, tutorial
