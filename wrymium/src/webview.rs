@@ -613,8 +613,8 @@ impl WebView {
     ) -> Result<()> {
         self.evaluate_script(js)?;
         // CEF's ExecuteJavaScript doesn't return a result directly.
-        // Call back with empty string to unblock callers.
-        // TODO: Implement proper result capture via V8 message passing.
+        // For result capture, use WebView::cdp_send("Runtime.evaluate", ...)
+        // via the CDP bridge in browser_use.rs instead.
         callback(String::new());
         Ok(())
     }
@@ -681,13 +681,29 @@ impl WebView {
         Ok(Rect::default())
     }
 
-    pub fn zoom(&self, _scale_factor: f64) -> Result<()> {
-        // TODO: browser_host.set_zoom_level(log(scale_factor) / log(1.2))
+    pub fn zoom(&self, scale_factor: f64) -> Result<()> {
+        // CEF zoom level: factor = 1.2^level, so level = log(factor) / log(1.2)
+        let zoom_level = if scale_factor > 0.0 {
+            scale_factor.ln() / 1.2f64.ln()
+        } else {
+            0.0
+        };
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
+            if let Some(host) = ImplBrowser::host(browser) {
+                ImplBrowserHost::set_zoom_level(&host, zoom_level);
+            }
+        }
         Ok(())
     }
 
     pub fn focus(&self) -> Result<()> {
-        // TODO: browser_host.set_focus(true)
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
+            if let Some(host) = ImplBrowser::host(browser) {
+                ImplBrowserHost::set_focus(&host, 1);
+            }
+        }
         Ok(())
     }
 
@@ -700,7 +716,12 @@ impl WebView {
     }
 
     pub fn print(&self) -> Result<()> {
-        // TODO: browser_host.print()
+        let guard = self.browser.lock().unwrap();
+        if let Some(ref browser) = *guard {
+            if let Some(host) = ImplBrowser::host(browser) {
+                ImplBrowserHost::print(&host);
+            }
+        }
         Ok(())
     }
 
