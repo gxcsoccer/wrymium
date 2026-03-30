@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude</title>
+  <style id="vendor-hljs">/*INJECT:github-dark.min.css*/</style>
+  <style id="app-style">/*INJECT:style.css*/</style>
+</head>
+<body>
+  <div id="app">
+    <!-- Left Sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-top">
+        <button id="sidebar-collapse-btn" class="sidebar-icon-btn" title="Collapse sidebar">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="10" rx="1"/><line x1="6" y1="3" x2="6" y2="13"/></svg>
+        </button>
+        <button id="sidebar-new-chat" class="sidebar-action-btn" title="New chat">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
+          <span>New chat</span>
+        </button>
+      </div>
+
+      <div class="sidebar-search">
+        <svg class="search-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
+        <input type="text" id="search-input" placeholder="Search conversations...">
+      </div>
+
+      <div class="sidebar-recents">
+        <div class="sidebar-section-title">Recents</div>
+        <div id="conversation-list"></div>
+      </div>
+
+      <div class="sidebar-files">
+        <div class="sidebar-section-title sidebar-section-toggle" id="files-toggle">
+          <span>Files</span>
+          <svg class="toggle-arrow" width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M3 2l4 3-4 3z"/></svg>
+        </div>
+        <div id="file-tree" class="file-tree hidden">
+          <div id="file-tree-path" class="file-tree-path"></div>
+          <div id="file-tree-contents" class="file-tree-contents"></div>
+        </div>
+      </div>
+
+      <div class="sidebar-bottom">
+        <div class="sidebar-user">
+          <div class="user-avatar">C</div>
+          <span class="user-name">Claude Desktop</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Panel -->
+    <div id="main-panel">
+      <!-- Top Bar -->
+      <header id="top-bar">
+        <div class="top-bar-left">
+          <button id="sidebar-expand-btn" class="top-bar-btn hidden" title="Expand sidebar">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="10" rx="1"/><line x1="6" y1="3" x2="6" y2="13"/></svg>
+          </button>
+          <span id="conversation-title" class="conv-title-display">New conversation</span>
+        </div>
+        <div class="top-bar-center">
+          <div class="mode-tabs">
+            <button class="mode-tab active" data-mode="chat">Chat</button>
+            <button class="mode-tab" data-mode="canvas">Canvas</button>
+            <button class="mode-tab" data-mode="browse">Browse</button>
+          </div>
+        </div>
+        <div class="top-bar-right">
+          <button id="stop-btn" class="top-bar-btn hidden" title="Stop generation">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Chat Mode Panel -->
+      <div id="chat-panel" class="mode-panel active">
+        <main id="messages">
+          <div id="welcome" class="welcome">
+            <div class="welcome-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+                <path d="M16.604 2.386a1.246 1.246 0 0 0-1.208 0L4.36 8.397a1.246 1.246 0 0 0-.604 1.07v7.066c0 .441.23.85.604 1.07l11.036 6.011a1.246 1.246 0 0 0 1.208 0l3.036-1.654a1.246 1.246 0 0 0 0-2.14L8.604 13.808a1.246 1.246 0 0 1-.604-1.07V9.603c0-.441.23-.85.604-1.07L16 4.59a1.246 1.246 0 0 0 0-2.14l-1.396-.064z" fill="#D4A574"/>
+              </svg>
+            </div>
+            <h2>How can I help you today?</h2>
+            <p class="welcome-sub">Powered by Claude Code CLI via wrymium</p>
+          </div>
+        </main>
+
+        <footer id="footer">
+          <div id="thinking" class="thinking hidden">
+            <span class="thinking-dots"><span></span><span></span><span></span></span>
+            <span class="thinking-text">Claude is thinking...</span>
+          </div>
+          <div class="input-wrapper">
+            <button id="attach-btn" class="input-icon-btn" title="Attach file">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="8" y1="4" x2="8" y2="12"/><line x1="4" y1="8" x2="12" y2="8"/></svg>
+            </button>
+            <textarea id="input" placeholder="Reply..." rows="1" autofocus></textarea>
+            <div class="input-right">
+              <span id="model-display" class="model-badge">Claude</span>
+              <button id="send-btn" title="Send (Ctrl+Enter)">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3 13V9.5L7 8 3 6.5V3L14 8z"/></svg>
+              </button>
+            </div>
+          </div>
+        </footer>
+      </div>
+
+      <!-- Canvas Panel -->
+      <div id="canvas-panel" class="mode-panel hidden">
+        <div class="canvas-layout">
+          <div class="canvas-sidebar">
+            <div class="canvas-sidebar-header">
+              <span>Artifacts</span>
+              <span id="canvas-count" class="canvas-count">0</span>
+            </div>
+            <div id="artifact-list" class="artifact-list"></div>
+          </div>
+          <div class="canvas-main">
+            <div class="canvas-toolbar">
+              <span id="canvas-artifact-title" class="canvas-artifact-title">No artifact selected</span>
+              <div class="canvas-toolbar-right">
+                <button id="canvas-toggle-source" class="canvas-tool-btn">Source</button>
+                <button id="canvas-toggle-preview" class="canvas-tool-btn active">Preview</button>
+                <button id="canvas-copy-btn" class="canvas-tool-btn">Copy</button>
+              </div>
+            </div>
+            <div class="canvas-content">
+              <div id="canvas-source" class="canvas-source hidden"><pre><code id="canvas-source-code"></code></pre></div>
+              <div id="canvas-preview" class="canvas-preview">
+                <iframe id="canvas-iframe" sandbox="allow-scripts" srcdoc="<html><body style='display:flex;align-items:center;justify-content:center;height:100vh;color:#999;font-family:sans-serif'><p>Select an artifact to preview</p></body></html>"></iframe>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Browse Panel -->
+      <div id="browse-panel" class="mode-panel hidden">
+        <div class="browse-layout">
+          <div class="browse-toolbar">
+            <button id="browse-back" class="browse-nav-btn" title="Back">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="10 3 5 8 10 13"/></svg>
+            </button>
+            <button id="browse-forward" class="browse-nav-btn" title="Forward">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 3 11 8 6 13"/></svg>
+            </button>
+            <button id="browse-refresh" class="browse-nav-btn" title="Refresh">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5"/><polyline points="13 2 13 5.5 9.5 5.5"/></svg>
+            </button>
+            <div class="browse-url-bar">
+              <input id="browse-url" type="text" placeholder="Enter URL...">
+            </div>
+            <button id="browse-screenshot" class="browse-nav-btn" title="Screenshot">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="1"/><circle cx="8" cy="8.5" r="2.5"/></svg>
+            </button>
+          </div>
+          <div id="browse-viewport" class="browse-viewport">
+            <div class="browse-placeholder">
+              <p>Enter a URL above to browse</p>
+              <p class="browse-status" id="browse-status"></p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>/*INJECT:marked.min.js*/</script>
+  <script>/*INJECT:highlight.min.js*/</script>
+  <script>/*INJECT:app.js*/</script>
+</body>
+</html>

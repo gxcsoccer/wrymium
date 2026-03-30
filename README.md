@@ -96,6 +96,7 @@ cargo wrymium run --release    # optimized (LTO + strip)
 | `webview-control` | Runtime WebView APIs (visibility, bounds, zoom, theme, reparent) | `cd examples/webview-control && cargo wrymium run` |
 | `cdp-test` | Chrome DevTools Protocol bridge test | `cd examples/cdp-test && cargo wrymium run` |
 | `bench` | Performance benchmarks | `cd examples/bench && cargo wrymium run` |
+| `claude-desktop` | Claude Desktop clone — chat UI, Canvas, file browser, Browse WebView | `cd examples/claude-desktop && cargo wrymium run` |
 | `tauri-app` | Full Tauri 2.x app with `invoke()` IPC | See [Getting Started](docs/getting-started.md) |
 
 ## Developer Tools

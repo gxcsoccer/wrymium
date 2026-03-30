@@ -38,7 +38,7 @@ pub struct WebViewBuilder<'a> {
     pub(crate) url: Option<String>,
     pub(crate) html: Option<String>,
     pub(crate) initialization_scripts: Vec<(String, bool)>, // (script, main_only)
-    pub(crate) ipc_handler: Option<Box<dyn Fn(Request<String>) + 'static>>,
+    pub(crate) ipc_handler: Option<Box<dyn Fn(Request<String>) + Send + 'static>>,
     pub(crate) custom_protocols:
         Vec<(String, Box<dyn Fn(&str, Request<Vec<u8>>, RequestAsyncResponder) + Send + Sync + 'static>)>,
     pub(crate) devtools: bool,
@@ -163,7 +163,7 @@ impl<'a> WebViewBuilder<'a> {
 
     pub fn with_ipc_handler<F>(mut self, handler: F) -> Self
     where
-        F: Fn(Request<String>) + 'static,
+        F: Fn(Request<String>) + Send + 'static,
     {
         self.ipc_handler = Some(Box::new(handler));
         self
@@ -537,9 +537,19 @@ impl WebView {
             builder.download_completed_handler.map(|h| std::sync::Arc::new(std::sync::Mutex::new(h)));
 
         // Create CefClient with handlers
+        // Wrap ipc_handler in Arc<Mutex> to satisfy Send+Sync for CEF's thread model
+        let ipc_handler_arc: Option<std::sync::Arc<dyn Fn(http::Request<String>) + Send + Sync>> =
+            builder.ipc_handler.map(|h| {
+                let mutex = std::sync::Mutex::new(h);
+                std::sync::Arc::new(move |req: http::Request<String>| {
+                    if let Ok(handler) = mutex.lock() {
+                        handler(req);
+                    }
+                }) as std::sync::Arc<dyn Fn(http::Request<String>) + Send + Sync>
+            });
         let webview_id_for_client = id.clone();
         let mut client = WrymiumClient::new(
-            None,
+            ipc_handler_arc,
             shared_browser.clone(),
             shared_cdp_bridge.clone(),
             download_started,
@@ -1085,8 +1095,12 @@ wrap_client! {
 
             // Call the ipc_handler if registered
             if let Some(ref handler) = self.ipc_handler {
-                let request = http::Request::builder()
-                    .uri(&url)
+                let mut builder = http::Request::builder();
+                // Only set URI if it's valid (file:// URIs may fail http::Uri parsing)
+                if url.parse::<http::Uri>().is_ok() {
+                    builder = builder.uri(&url);
+                }
+                let request = builder
                     .body(body)
                     .unwrap_or_else(|_| http::Request::new(String::new()));
                 handler(request);
