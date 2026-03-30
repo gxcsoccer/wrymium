@@ -430,6 +430,62 @@ mod builder_protocol_tests {
 }
 
 // ==========================================================================
+// WebView zoom level math tests
+// ==========================================================================
+
+#[cfg(test)]
+mod zoom_tests {
+    /// Mirror of the zoom level formula used in WebView::zoom().
+    fn zoom_level(scale_factor: f64) -> f64 {
+        if scale_factor > 0.0 {
+            scale_factor.ln() / 1.2f64.ln()
+        } else {
+            0.0
+        }
+    }
+
+    #[test]
+    fn zoom_level_1x_is_0() {
+        // 1.0 scale factor should yield level 0 (no zoom)
+        let level = zoom_level(1.0);
+        assert!((level).abs() < 1e-10, "1x zoom should be level 0, got {level}");
+    }
+
+    #[test]
+    fn zoom_level_1_2x() {
+        // 1.2x scale factor should yield level 1.0 (one step)
+        let level = zoom_level(1.2);
+        assert!((level - 1.0).abs() < 1e-10, "1.2x zoom should be level 1.0, got {level}");
+    }
+
+    #[test]
+    fn zoom_level_inverse() {
+        // Round-trip: factor → level → factor should return original
+        for &factor in &[0.5f64, 0.8, 1.0, 1.25, 1.5, 2.0, 4.0] {
+            let level = zoom_level(factor);
+            let back = 1.2f64.powf(level);
+            assert!(
+                (back - factor).abs() < 1e-10,
+                "round-trip failed for factor={factor}: got {back}"
+            );
+        }
+    }
+
+    #[test]
+    fn zoom_level_zero_or_negative_returns_zero() {
+        assert_eq!(zoom_level(0.0), 0.0);
+        assert_eq!(zoom_level(-1.0), 0.0);
+    }
+
+    #[test]
+    fn zoom_level_2x_is_about_3_8() {
+        // 2x should be ~3.8 steps (ln(2)/ln(1.2) ≈ 3.802)
+        let level = zoom_level(2.0);
+        assert!((level - 3.802).abs() < 0.001, "2x zoom level expected ~3.802, got {level}");
+    }
+}
+
+// ==========================================================================
 // CDP Bridge unit tests (no CEF runtime needed)
 // ==========================================================================
 
